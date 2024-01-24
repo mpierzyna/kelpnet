@@ -1,3 +1,4 @@
+from typing import Any
 import pandas as pd
 import rasterio
 
@@ -9,7 +10,7 @@ from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lion_pytorch import Lion
 import torchmetrics
 
-from data import KelpDataset
+from data import KelpDataset, split_train_test_val
 import trafos
 import warnings
 
@@ -101,8 +102,8 @@ class UNet(nn.Module):
         d4 = self.d4(d3, s1)
          
         # Classifier
+        # No sigmoid here, because we use BCEWithLogitsLoss
         outputs = self.outputs(d4)
-        # outputs = self.sigmoid(outputs)
         outputs = outputs.squeeze(1)  # remove channel dimension since we only have one channel
         return outputs
 
@@ -111,54 +112,80 @@ class LitUNet(L.LightningModule):
     def __init__(self, n_ch):
         super().__init__()
         self.model = UNet(n_ch=n_ch)
-        self.dice = torchmetrics.Dice()
+        self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([40]))  # Kelp is rare, so we weight it higher.
 
     def training_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self.model(x)
-        loss = nn.functional.binary_cross_entropy_with_logits(y_hat, y)
+        loss = self.criterion(y_hat, y)
         self.log("train_loss", loss)
-        self.log("train_dice", self.dice(y_hat, y.int()))
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self.model(x)
-        loss = nn.functional.binary_cross_entropy_with_logits(y_hat, y)
+        loss = self.criterion(y_hat, y)
         self.log("val_loss", loss, sync_dist=True)
-        self.log("val_dice", self.dice(y_hat, y.int()), sync_dist=True)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self.model(x)
+        loss = self.criterion(y_hat, y)
+        return loss
+
+    def predict_step(self, batch, batch_idx):
+        x, _ = batch
+        y_hat = self.model(x)
+        y_hat = torch.sigmoid(y_hat)  # Now apply sigmoid because inference
+        return y_hat
 
     def configure_optimizers(self):
-        optimizer = Lion(self.parameters(), lr=1e-3, weight_decay=1e-2)
+        optimizer = Lion(self.parameters(), lr=.5e-3, weight_decay=1e-2)
         return optimizer
+
+    @classmethod
+    def apply_train_trafos(cls, ds: KelpDataset) -> None:
+        """Add transformations that are to training dataset"""
+        ds.add_transform(trafos.add_rs_indices)
+        ds.add_transform(trafos.downsample)
+        ds.add_transform(trafos.channel_first)
+        ds.add_transform(trafos.to_tensor)
+        ds.add_transform(lambda X, y: (X, y.float()))  # y is float for BCELoss
+
+    @classmethod
+    def apply_val_trafos(cls, ds: KelpDataset) -> None:
+        """Add transformations that are to validation dataset (no random transformations!)"""
+        cls.apply_train_trafos(ds)
+
+    @classmethod
+    def apply_test_trafos(cls, ds: KelpDataset) -> None:
+        """Add transformations that are to test/prediction dataset (no random transformations!)"""
+        cls.apply_train_trafos(ds)
 
 
 def get_dataset():
     # Load data and add trafos
     quality_df = pd.read_csv("quality.csv")
     ds = KelpDataset(img_dir="data/train_satellite/", mask_dir="data/train_kelp/", dir_mask=quality_df["nan_fraction"] == 0)
-    ds.add_transform(trafos.add_rs_indices)
-    ds.add_transform(trafos.downsample)
-    ds.add_transform(trafos.channel_first)
-    ds.add_transform(trafos.to_tensor)
-    ds.add_transform(lambda X, y: (X, y.float()))  # y is float for BCELoss
+    LitUNet.apply_train_trafos(ds)
 
     # Split data
-    gen = torch.Generator().manual_seed(42)
-    ds_train, ds_val, ds_test = torch.utils.data.random_split(ds, [.7, .15, .15], generator=gen)
+    ds_train, ds_val, ds_test = split_train_test_val(ds)
     return ds_train, ds_val, ds_test
 
 
 if __name__ == "__main__":
+    BATCH_SIZE = 32
     ds_train, ds_val, _ = get_dataset()
-    train_loader = torch.utils.data.DataLoader(ds_train, num_workers=4)
-    val_loader = torch.utils.data.DataLoader(ds_val, num_workers=4)
+    train_loader = torch.utils.data.DataLoader(ds_train, num_workers=8, batch_size=BATCH_SIZE)
+    val_loader = torch.utils.data.DataLoader(ds_val, num_workers=8, batch_size=BATCH_SIZE)
 
     # Train
     model = LitUNet(n_ch=11)
     trainer = L.Trainer(
-        limit_train_batches=256, 
-        max_epochs=25,
+        # limit_train_batches=256,  # number of total batches into which dataset is split
+        max_epochs=15,
         callbacks=[EarlyStopping(monitor="val_loss", patience=3)]
     )
     trainer.fit(
