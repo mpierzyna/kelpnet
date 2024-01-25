@@ -113,12 +113,14 @@ class LitUNet(L.LightningModule):
         super().__init__()
         self.model = UNet(n_ch=n_ch)
         self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([40]))  # Kelp is rare, so we weight it higher.
+        self.dice = torchmetrics.Dice()
 
     def training_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self.model(x)
         loss = self.criterion(y_hat, y)
         self.log("train_loss", loss)
+        self.log("train_dice", self.dice(self.model.sigmoid(y_hat), y.int()), sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -126,6 +128,7 @@ class LitUNet(L.LightningModule):
         y_hat = self.model(x)
         loss = self.criterion(y_hat, y)
         self.log("val_loss", loss, sync_dist=True)
+        self.log("val_dice", self.dice(self.model.sigmoid(y_hat), y.int()), sync_dist=True)
         return loss
 
     def test_step(self, batch, batch_idx):
@@ -141,7 +144,7 @@ class LitUNet(L.LightningModule):
         return y_hat
 
     def configure_optimizers(self):
-        optimizer = Lion(self.parameters(), lr=.5e-3, weight_decay=1e-2)
+        optimizer = Lion(self.parameters(), lr=.5e-3, weight_decay=0)
         return optimizer
 
     @classmethod
@@ -185,8 +188,9 @@ if __name__ == "__main__":
     model = LitUNet(n_ch=11)
     trainer = L.Trainer(
         # limit_train_batches=256,  # number of total batches into which dataset is split
-        max_epochs=15,
-        callbacks=[EarlyStopping(monitor="val_loss", patience=3)]
+        max_epochs=30,
+        callbacks=[EarlyStopping(monitor="val_loss", patience=5)],
+        log_every_n_steps=10,
     )
     trainer.fit(
         model=model, 
