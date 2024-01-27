@@ -21,14 +21,14 @@ def load_img(fpath_img: str, fpath_mask: Optional[str]):
     not_cloud_land = (~is_cloud) & (~is_land)
     img = np.concatenate([img, not_cloud_land[:, :, None]], axis=2)
     img[:, :, 6] = is_land
-    
+
     # Load mask (if present)
     if fpath_mask is None:
         mask = None
     else:
         mask = rasterio.open(fpath_mask).read()
         mask = mask[0].astype(np.uint8)
-    
+
     return img, mask
 
 
@@ -43,13 +43,13 @@ class KelpDataset(Dataset):
         else:
             # List masks (y)
             mask_list = sorted(pathlib.Path(mask_dir).glob("*.tif"))
-            
+
             # Sanity check that images and labels are associated correctly
             for img_path, mask_path in zip(img_list, mask_list):
                 img_tile_id, _ = img_path.stem.split("_")
                 mask_tile_id, _ = mask_path.stem.split("_")
                 assert img_tile_id == mask_tile_id
-            
+
         # Apply directory mask to image and mask
         self.img_list = np.array(img_list)
         self.mask_list = np.array(mask_list)
@@ -77,22 +77,30 @@ class KelpDataset(Dataset):
 
 
 class MultiTaskKelpDataset(KelpDataset):
-    def __init__(self, img_dir: str, mask_dir: Optional[str], cog_path: Optional[str], dir_mask: Optional[np.ndarray] = None):
+    def __init__(self, img_dir: str, mask_dir: Optional[str], cog_path: Optional[str],
+                 dir_mask: Optional[np.ndarray] = None):
         super().__init__(img_dir, mask_dir, dir_mask)
 
-        df_cog = pd.read_csv(cog_path, index_col=0)
-        if dir_mask is not None:
-            df_cog = df_cog.loc[dir_mask].reset_index(drop=True)
-        self.df_cog = df_cog
+        if cog_path is None:
+            self.df_cog = None
+        else:
+            df_cog = pd.read_csv(cog_path, index_col=0)
+            if dir_mask is not None:
+                df_cog = df_cog.loc[dir_mask].reset_index(drop=True)
+            self.df_cog = df_cog
+
         self.transforms_cog = []
 
     def __getitem__(self, idx):
         img, mask = super().__getitem__(idx)
+        if self.df_cog is None:
+            return img, (mask, None)
+
         cog = self.df_cog.iloc[idx].values.astype(np.float32)
         for tf in self.transforms_cog:
             cog = tf(cog)
         return img, (mask, cog)
-    
+
     def add_regr_transform(self, tf):
         self.transforms_cog.append(tf)
 

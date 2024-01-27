@@ -79,15 +79,15 @@ class MultiTaskUNet(nn.Module):
         # Bottleneck (only doubles channels)
         self.b = ConvBlock(512, 1024)
 
-        # # Task 1: Segmentation Decoder
-        # self.d1 = DecoderBlock(1024, 512)
-        # self.d2 = DecoderBlock(512, 256)
-        # self.d3 = DecoderBlock(256, 128)
-        # self.d4 = DecoderBlock(128, 64)
+        # Task 1: Segmentation Decoder
+        self.d1 = DecoderBlock(1024, 512)
+        self.d2 = DecoderBlock(512, 256)
+        self.d3 = DecoderBlock(256, 128)
+        self.d4 = DecoderBlock(128, 64)
 
-        # # Task 1: Segmentation Classifier
-        # self.outputs = nn.Conv2d(64, 1, kernel_size=1, padding=0)
-        # self.sigmoid = nn.Sigmoid()  # kelp cover is a binary mask
+        # Task 1: Segmentation Classifier
+        self.outputs = nn.Conv2d(64, 1, kernel_size=1, padding=0)
+        self.sigmoid = nn.Sigmoid()  # kelp cover is a binary mask
 
         # Task 2: Regression
         self.regr = nn.Sequential(
@@ -129,92 +129,86 @@ class MultiTaskUNet(nn.Module):
 
 
 class LitMTUNet(L.LightningModule):
-    def __init__(self, n_ch, n_regr_out, task: Task):
+    def __init__(self, n_ch, n_regr_out):
         super().__init__()
         self.model = MultiTaskUNet(n_ch=n_ch, n_regr_out=n_regr_out)
         self.criterion_segm = nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor([40]))  # Kelp is rare, so we weight it higher.
         self.criterion_regr = nn.MSELoss()
-        self.task = task
 
-    def toggle_task(self):
-        """Toggle between tasks"""
-        self.task = Task.SEGMENTATION if self.task == Task.REGRESSION else Task.REGRESSION
+    def _shared_step(self, batch, prefix: str):
+        x, (y_seg, y_rgr) = batch
+
+        # Segmentation
+        y_hat_seg = self.model(x, task=Task.SEGMENTATION)
+        loss_seg = self.criterion_segm(y_hat_seg, y_seg)
+        self.log(f"{prefix}_loss_seg", loss_seg)
+
+        # Regression
+        y_hat_rgr = self.model(x, task=Task.REGRESSION)
+        loss_rgr = self.criterion_regr(y_hat_rgr, y_rgr)
+        self.log(f"{prefix}_loss_regr", loss_rgr)
+
+        # Combine losses
+        w_seg = 0.5
+        w_rgr = 1 - w_seg
+        loss = w_seg * loss_seg + w_rgr * loss_rgr
+        self.log(f"{prefix}_loss_joint", loss)
+        return loss
 
     def training_step(self, batch, batch_idx):
         """For training, we alternate between tasks per batch"""
-        x, (y_seg, y_regr) = batch
-        if self.task == Task.SEGMENTATION:
-            y_hat = self.model(x, task=Task.SEGMENTATION)
-            loss = self.criterion_segm(y_hat, y_seg)
-            self.log("train_loss_seg", loss)
-            return loss
-        elif self.task == Task.REGRESSION:
-            y_hat = self.model(x, task=Task.REGRESSION)
-            loss = self.criterion_regr(y_hat, y_regr)
-            self.log("train_loss_regr", loss)
-            return loss
+        return self._shared_step(batch, "train")
 
     def validation_step(self, batch, batch_idx):
-        x, (y_seg, y_regr) = batch
-        if self.task == Task.SEGMENTATION:
-            y_hat = self.model(x, task=Task.SEGMENTATION)
-            loss = self.criterion_segm(y_hat, y_seg)
-            self.log("val_loss_seg", loss)
-            return loss
-        elif self.task == Task.REGRESSION:
-            y_hat = self.model(x, task=Task.REGRESSION)
-            loss = self.criterion_regr(y_hat, y_regr)
-            self.log("val_loss_regr", loss)
-            return loss
+        self._shared_step(batch, "val")
 
     def test_step(self, batch, batch_idx):
-        x, (y_seg, y_regr) = batch
-        if self.task == Task.SEGMENTATION:
-            y_hat = self.model(x, task=Task.SEGMENTATION)
-            loss = self.criterion_segm(y_hat, y_seg)
-            self.log("test_loss_seg", loss)
-            return loss
-        elif self.task == Task.REGRESSION:
-            y_hat = self.model(x, task=Task.REGRESSION)
-            loss = self.criterion_regr(y_hat, y_regr)
-            self.log("test_loss_regr", loss)
-            return loss
+        self._shared_step(batch, "test")
 
     def predict_step(self, batch, batch_idx):
         x, _ = batch
-        if self.task == Task.SEGMENTATION:
-            y_hat = self.model(x, task=Task.SEGMENTATION)
-            y_hat = torch.sigmoid(y_hat)  # Now apply sigmoid because inference
-            return y_hat
-        elif self.task == Task.REGRESSION:
-            y_hat = self.model(x, task=Task.REGRESSION)
-            return y_hat
+        y_hat_seg = self.model(x, task=Task.SEGMENTATION)
+        y_hat_seg = torch.sigmoid(y_hat_seg)  # Now apply sigmoid because inference
+
+        y_hat_rgr = self.model(x, task=Task.REGRESSION)
+
+        return y_hat_seg, y_hat_rgr
 
     def configure_optimizers(self):
         optimizer = Lion(self.parameters(), lr=.5e-3, weight_decay=1e-2)
         return optimizer
 
     @classmethod
-    def apply_train_trafos(cls, ds: MultiTaskKelpDataset) -> None:
-        """Add transformations that are to training dataset"""
-
-        def random_cog(cog):
-            if np.isnan(cog[0]):
-                # Randomly set x, y, and inertia if no Kelp is present
-                cog[[0, 1, 2]] = np.random.uniform(0, 1, size=3)
-                cog[2] = cog[2] * 1.4  # scale because inertia is scaled with log10 median 
-                return cog
-            else:
-                return cog
-
+    def _apply_img_trafos(cls, ds: MultiTaskKelpDataset) -> None:
+        """Apply trafos to images and masks"""
         ds.add_transform(trafos.add_rs_indices)
         ds.add_transform(trafos.downsample)
         ds.add_transform(trafos.channel_first)
         ds.add_transform(trafos.to_tensor)
         ds.add_transform(lambda X, y: (X, y.float()))  # y is float for BCELoss
+
+    @classmethod
+    def _apply_cog_trafos(cls, ds: MultiTaskKelpDataset) -> None:
+        """Apply COG trafos"""
+
+        def random_cog(cog):
+            if np.isnan(cog[0]):
+                # Randomly set x, y, and inertia if no Kelp is present
+                cog[[0, 1, 2]] = np.random.uniform(0, 1, size=3)
+                cog[2] = cog[2] * 1.4  # scale because inertia is scaled with log10 median
+                return cog
+            else:
+                return cog
+
         ds.add_regr_transform(random_cog)
         ds.add_regr_transform(lambda y_cog: torch.tensor(y_cog[[0, 1]], dtype=torch.float32))  # only x,y for now
+
+    @classmethod
+    def apply_train_trafos(cls, ds: MultiTaskKelpDataset) -> None:
+        """Add transformations that are to training dataset"""
+        cls._apply_img_trafos(ds)
+        cls._apply_cog_trafos(ds)
 
     @classmethod
     def apply_val_trafos(cls, ds: MultiTaskKelpDataset) -> None:
@@ -247,11 +241,11 @@ if __name__ == "__main__":
     test_loader = torch.utils.data.DataLoader(ds_test, num_workers=8, batch_size=BATCH_SIZE)
 
     # Train
-    model = LitMTUNet(n_ch=11, n_regr_out=2, task=Task.REGRESSION)
+    model = LitMTUNet(n_ch=11, n_regr_out=2)
     trainer = L.Trainer(
         devices=1,
         # limit_train_batches=256,  # number of total batches into which dataset is split
-        max_epochs=2,
+        max_epochs=15,
         # callbacks=[EarlyStopping(monitor="val_loss", patience=3)],
         log_every_n_steps=10,
     )
@@ -260,4 +254,6 @@ if __name__ == "__main__":
         train_dataloaders=train_loader,
         val_dataloaders=val_loader,
     )
+
+    # New trainer on just one device
     trainer.test(ckpt_path="best", dataloaders=test_loader)
