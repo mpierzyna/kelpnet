@@ -84,11 +84,17 @@ class MultiTaskKelpDataset(KelpDataset):
         if dir_mask is not None:
             df_cog = df_cog.loc[dir_mask].reset_index(drop=True)
         self.df_cog = df_cog
+        self.transforms_cog = []
 
     def __getitem__(self, idx):
         img, mask = super().__getitem__(idx)
         cog = self.df_cog.iloc[idx].values.astype(np.float32)
+        for tf in self.transforms_cog:
+            cog = tf(cog)
         return img, (mask, cog)
+    
+    def add_regr_transform(self, tf):
+        self.transforms_cog.append(tf)
 
 
 def split_train_test_val(ds: KelpDataset, seed=42):

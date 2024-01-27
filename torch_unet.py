@@ -181,7 +181,7 @@ def get_dataset():
 if __name__ == "__main__":
     BATCH_SIZE = 32
     ds_train, ds_val, _ = get_dataset()
-    train_loader = torch.utils.data.DataLoader(ds_train, num_workers=8, batch_size=BATCH_SIZE)
+    train_loader = torch.utils.data.DataLoader(ds_train, num_workers=8, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = torch.utils.data.DataLoader(ds_val, num_workers=8, batch_size=BATCH_SIZE)
 
     # Train
