@@ -1,6 +1,7 @@
 import datetime
 import os
 import pathlib
+import shutil
 
 import cv2
 import lightning as L
@@ -35,10 +36,8 @@ def get_tiff_profile():
 
 if __name__ == "__main__":
     # Load model
-    unet = LitMTUNet.load_from_checkpoint(
-        "lightning_logs/version_0/checkpoints/epoch=14-step=1575.ckpt",
-        n_ch=11, n_regr_out=2
-    )
+    ckpt_path = pathlib.Path("lightning_logs/version_7/checkpoints/epoch=14-step=1860.ckpt")
+    unet = LitMTUNet.load_from_checkpoint(ckpt_path, n_ch=11, n_regr_out=2)
 
     # Load data
     ds_sub = KelpDataset(img_dir="data/test_satellite/", mask_dir=None)
@@ -55,7 +54,7 @@ if __name__ == "__main__":
     # Upsample and save to tiff
     submission_name = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     submission_dir = SUBMISSION_ROOT / submission_name
-    submission_dir.mkdir(exist_ok=True, parents=True)
+    (submission_dir / "pred").mkdir(exist_ok=True, parents=True)  # Dir where predictions are saved
 
     # Tiff profile
     profile = get_tiff_profile()
@@ -66,8 +65,11 @@ if __name__ == "__main__":
         y_hat_i = upsample_mask(y_hat_i)
 
         # Write as tiff
-        with rasterio.open(submission_dir / f"{tile_id}_kelp.tif", "w", **profile) as dst:
+        with rasterio.open(submission_dir / "pred" / f"{tile_id}_kelp.tif", "w", **profile) as dst:
             dst.write(y_hat_i, 1)
 
     # Tar it
-    os.system(f"cd {SUBMISSION_ROOT} && tar -czf {submission_name}.tar.gz {submission_name}")
+    os.system(f"cd {submission_dir} && tar -czf {submission_name}_pred.tar.gz pred")
+
+    # Backup model
+    shutil.copytree(ckpt_path.parent.parent, submission_dir / "model")

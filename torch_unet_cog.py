@@ -8,6 +8,7 @@ import rasterio
 import torch
 from lion_pytorch import Lion
 from torch import nn
+import torchmetrics
 
 import trafos
 from data import MultiTaskKelpDataset, split_train_test_val
@@ -135,14 +136,20 @@ class LitMTUNet(L.LightningModule):
         self.criterion_segm = nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor([40]))  # Kelp is rare, so we weight it higher.
         self.criterion_regr = nn.MSELoss()
+        self.dice =  torchmetrics.Dice()
 
     def _shared_step(self, batch, prefix: str):
         x, (y_seg, y_rgr) = batch
+        x_valid = torch.where(x[:, 0, :, :] < 0, 0, 1)  # mask for NaN values, to zero them for loss computation
 
         # Segmentation
         y_hat_seg = self.model(x, task=Task.SEGMENTATION)
-        loss_seg = self.criterion_segm(y_hat_seg, y_seg)
+        if prefix == "train":
+            loss_seg = self.criterion_segm(y_hat_seg * x_valid, y_seg * x_valid)
+        else:
+            loss_seg = self.criterion_segm(y_hat_seg, y_seg)
         self.log(f"{prefix}_loss_seg", loss_seg)
+        self.log(f"{prefix}_dice_seg", self.dice(self.model.sigmoid(y_hat_seg), y_seg.int()))
 
         # Regression
         y_hat_rgr = self.model(x, task=Task.REGRESSION)
@@ -224,8 +231,9 @@ class LitMTUNet(L.LightningModule):
 def get_dataset():
     # Load data and add trafos
     quality_df = pd.read_csv("quality.csv")
-    ds = MultiTaskKelpDataset(img_dir="data/train_satellite/", mask_dir="data/train_kelp/",
-                              dir_mask=quality_df["nan_fraction"] == 0, cog_path="data/kelp_cog.csv")
+    ds = MultiTaskKelpDataset(img_dir="data/train_satellite/", mask_dir="data/train_kelp/", cog_path="data/kelp_cog.csv")
+    # ds = MultiTaskKelpDataset(img_dir="data/train_satellite/", mask_dir="data/train_kelp/",
+    #                           dir_mask=quality_df["nan_fraction"] != 0, cog_path="data/kelp_cog.csv")
     LitMTUNet.apply_train_trafos(ds)
 
     # Split data

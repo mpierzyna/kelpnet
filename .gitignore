@@ -1,3 +1,7 @@
-data
+data/*
+!data/kelp_cog.csv
 lightning_logs
-submission
+
+
+.idea
+.ipynb_checkpoints
