@@ -8,10 +8,14 @@ import rasterio
 import torch
 from lion_pytorch import Lion
 from torch import nn
+import torch.optim
 import torchmetrics
+from lightning.pytorch.callbacks.early_stopping import EarlyStopping
+from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
 
 import trafos
-from data import MultiTaskKelpDataset, split_train_test_val
+from data import KelpDataset, split_train_test_val
+from utils import compute_kelp_distr
 
 torch.set_float32_matmul_precision("high")
 # Reading dataset raises warnings, which are anoying
@@ -94,10 +98,12 @@ class MultiTaskUNet(nn.Module):
         self.regr = nn.Sequential(
             nn.Flatten(),
             nn.Linear(16 * 16 * 1024, 256),
+            nn.Dropout(0.2),
             nn.ReLU(),
-            nn.Linear(256, 64),
+            nn.Linear(256, 16),
+            nn.Dropout(0.2),
             nn.ReLU(),
-            nn.Linear(64, n_regr_out),
+            nn.Linear(16, n_regr_out),
         )
 
     def forward(self, inputs, task: Task):
@@ -184,56 +190,49 @@ class LitMTUNet(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = Lion(self.parameters(), lr=.5e-3, weight_decay=1e-2)
-        return optimizer
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
+        return [optimizer], [lr_scheduler]
 
     @classmethod
-    def _apply_img_trafos(cls, ds: MultiTaskKelpDataset) -> None:
-        """Apply trafos to images and masks"""
+    def apply_train_trafos(cls, ds: KelpDataset) -> None:
+        """Add transformations that are to training dataset"""
+        # Image trafos
         ds.add_transform(trafos.add_rs_indices)
-        ds.add_transform(trafos.downsample)
+        ds.add_transform(trafos.augment)  # Random augmentation only during training!
+        ds.add_transform(trafos.channel_first)
+
+        # Add multi-task outputs
+        def add_cog(img, mask):
+            distr = compute_kelp_distr(mask)
+            cog = distr[[0, 1]]
+            if np.isnan(cog).any():
+                cog = np.random.uniform(0, 1, size=2)
+            return img, (mask, cog)
+
+        ds.add_transform(add_cog)
+
+        # Convert to tensors
+        def to_tensor(X, y):
+            X = torch.tensor(X, dtype=torch.float32)
+            y_seg = torch.tensor(y[0], dtype=torch.float32)
+            y_rgr = torch.tensor(y[1], dtype=torch.float32)
+            return X, (y_seg, y_rgr)
+
+        ds.add_transform(to_tensor)
+
+    @classmethod
+    def apply_infer_trafos(cls, ds: KelpDataset) -> None:
+        """Add transformations for inference (no random rotations and no multi-task output)"""
+        ds.add_transform(trafos.add_rs_indices)
+        ds.add_transform(trafos.downsample)  # Downsample for validation and testing
         ds.add_transform(trafos.channel_first)
         ds.add_transform(trafos.to_tensor)
         ds.add_transform(lambda X, y: (X, y.float()))  # y is float for BCELoss
 
-    @classmethod
-    def _apply_cog_trafos(cls, ds: MultiTaskKelpDataset) -> None:
-        """Apply COG trafos"""
-
-        def random_cog(cog):
-            if np.isnan(cog[0]):
-                # Randomly set x, y, and inertia if no Kelp is present
-                cog[[0, 1, 2]] = np.random.uniform(0, 1, size=3)
-                cog[2] = cog[2] * 1.4  # scale because inertia is scaled with log10 median
-                return cog
-            else:
-                return cog
-
-        ds.add_regr_transform(random_cog)
-        ds.add_regr_transform(lambda y_cog: torch.tensor(y_cog[[0, 1]], dtype=torch.float32))  # only x,y for now
-
-    @classmethod
-    def apply_train_trafos(cls, ds: MultiTaskKelpDataset) -> None:
-        """Add transformations that are to training dataset"""
-        cls._apply_img_trafos(ds)
-        cls._apply_cog_trafos(ds)
-
-    @classmethod
-    def apply_val_trafos(cls, ds: MultiTaskKelpDataset) -> None:
-        """Add transformations that are to validation dataset (no random transformations!)"""
-        cls.apply_train_trafos(ds)
-
-    @classmethod
-    def apply_test_trafos(cls, ds: MultiTaskKelpDataset) -> None:
-        """Add transformations that are to test/prediction dataset (no random transformations!)"""
-        cls.apply_train_trafos(ds)
-
 
 def get_dataset():
     # Load data and add trafos
-    quality_df = pd.read_csv("quality.csv")
-    ds = MultiTaskKelpDataset(img_dir="data/train_satellite/", mask_dir="data/train_kelp/", cog_path="data/kelp_cog.csv")
-    # ds = MultiTaskKelpDataset(img_dir="data/train_satellite/", mask_dir="data/train_kelp/",
-    #                           dir_mask=quality_df["nan_fraction"] != 0, cog_path="data/kelp_cog.csv")
+    ds = KelpDataset(img_dir="data/train_satellite/", mask_dir="data/train_kelp/")
     LitMTUNet.apply_train_trafos(ds)
 
     # Split data
@@ -253,8 +252,11 @@ if __name__ == "__main__":
     trainer = L.Trainer(
         devices=1,
         # limit_train_batches=256,  # number of total batches into which dataset is split
-        max_epochs=15,
-        # callbacks=[EarlyStopping(monitor="val_loss", patience=3)],
+        max_epochs=50,
+        callbacks=[
+            # EarlyStopping(monitor="val_dice_seg", patience=5),
+            LearningRateMonitor(logging_interval="epoch")
+        ],
         log_every_n_steps=10,
     )
     trainer.fit(

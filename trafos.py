@@ -1,9 +1,11 @@
 """
 REMEMBER THAT MASK CAN BE `None`!
 """
+import numba
 import torch
 import numpy as np
 import cv2
+import albumentations as A
 
 
 def if_mask_valid(fn):
@@ -15,38 +17,48 @@ def if_mask_valid(fn):
     return wrapper
 
 
+@numba.njit(cache=True)
 def add_rs_indices(img, mask):
     """0: SWIR, 1: NIR, 2: R, 3: G, 4: B"""
-    swir = img[:, :, 0][:, :, None]
-    nir = img[:, :, 1][:, :, None]
-    r = img[:, :, 2][:, :, None]
-    g = img[:, :, 3][:, :, None]
-    b = img[:, :, 4][:, :, None]
+    swir = img[:, :, 0]
+    nir = img[:, :, 1]
+    r = img[:, :, 2]
+    g = img[:, :, 3]
+    b = img[:, :, 4]
 
     ndwi_1 = (g - nir) / (g + nir)
     ndwi_2 = (nir - swir) / (nir + swir)
     ndvi = (nir - r) / (nir + r)
+    
+    # Preallocate new array with new channels (for numba)
+    ni, nj, nch = img.shape
+    img_new = np.zeros((ni, nj, nch+3), dtype=img.dtype)
+    img_new[:, :, :nch] = img
+    img_new[:, :, nch] = ndwi_1
+    img_new[:, :, nch+1] = ndwi_2
+    img_new[:, :, nch+2] = ndvi
 
-    img = np.concatenate([img, ndwi_1, ndwi_2, ndvi], axis=2)
-    return img, mask
+    return img_new, mask
 
 
 def downsample(img, mask):
-    """OpenCV also requires channel to be last dimension"""
+    """OpenCV also requires channel to be last dimension (not needed if augmentations used)"""
     img = cv2.resize(img, (256, 256))
     mask = if_mask_valid(cv2.resize)(mask, (256, 256))
     return img, mask
 
 
-def random_flip(img, mask):
-    """Randomly flip image and mask horizontally or vertically."""
-    a, b = np.random.random(size=2)
-    if a > .5:
-        if b > .5:
-            return cv2.flip(img, 0), if_mask_valid(cv2.flip)(mask, 0)
-        return cv2.flip(img, 1), if_mask_valid(cv2.flip)(mask, 1)
-    return img, mask
+aug_pipeline = A.Compose([
+    A.Rotate(border_mode=cv2.BORDER_CONSTANT, value=-1, p=0.5),  # -1 is nan effectively and will be ignored in loss
+    A.RandomCrop(256, 256, p=1),  # always crop to have dataset of same size
+    A.HorizontalFlip(),
+])
 
+
+def augment(img, mask):
+    """Apply augmentation pipeline. Expects opencv style channels, ie last"""
+    res = aug_pipeline(image=img, mask=mask)
+    return res["image"], res["mask"]
 
 def channel_first(img, mask):
     """Torch wants channels first. Apply last!"""

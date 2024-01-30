@@ -36,18 +36,17 @@ def get_tiff_profile():
 
 if __name__ == "__main__":
     # Load model
-    ckpt_path = pathlib.Path("lightning_logs/version_7/checkpoints/epoch=14-step=1860.ckpt")
+    ckpt_path = pathlib.Path("lightning_logs/version_10/checkpoints/epoch=49-step=6200.ckpt")
     unet = LitMTUNet.load_from_checkpoint(ckpt_path, n_ch=11, n_regr_out=2)
 
     # Load data
     ds_sub = KelpDataset(img_dir="data/test_satellite/", mask_dir=None)
-    unet._apply_img_trafos(ds_sub)  # For submission, we don't have cog
+    unet.apply_infer_trafos(ds_sub)  # For submission, we don't have cog
     ds_sub_loader = torch.utils.data.DataLoader(ds_sub, batch_size=16, num_workers=4)
 
-    # Make predictions
+    # Make predictions (Batch-wise prediction (list of tensors of dim [batch_size, 256, 256]))
     trainer = L.Trainer(devices=1)
-    y_hat = trainer.predict(unet,
-                            ds_sub_loader)  # Batch-wise prediction (list of tensors of dim [batch_size, 256, 256])
+    y_hat = trainer.predict(unet, ds_sub_loader)
     y_hat = torch.concat([y_hat_batch[0] for y_hat_batch in y_hat])  # Concatenate to single tensor of dim [n_samples, 256, 256]
     y_hat = y_hat > 0.5  # Make binary mask
 
