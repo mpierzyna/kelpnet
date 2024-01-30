@@ -1,3 +1,4 @@
+import enum
 import torch
 from typing import Optional
 import pathlib
@@ -8,6 +9,22 @@ import pandas as pd
 from torch.utils.data import Dataset
 
 
+class Channel(enum.IntEnum):
+    # Default channels
+    SWIR = 0
+    NIR = 1
+    R = 2
+    G = 3
+    B = 4
+    IS_CLOUD = 5
+    IS_LAND = 6  # elevation height originally
+    NOT_CLOUD_LAND = 7  # Extra mask
+    # RS indices
+    NDWI_1 = 8
+    NDWI_2 = 9
+    NDVI = 10
+
+
 def load_img(fpath_img: str, fpath_mask: Optional[str]):
     """Read image from file and return as float32 tensor"""
     # Load image
@@ -16,11 +33,11 @@ def load_img(fpath_img: str, fpath_mask: Optional[str]):
     img[:, :, :5] = img[:, :, :5] / 65536.  # scale bands to [0, 1]
 
     # I assume, detection only possible when not cloudy and not land
-    is_cloud = img[:, :, 5].astype(bool)
-    is_land = img[:, :, 6] > 0  # make land masked based on DEM
+    is_cloud = img[:, :, Channel.IS_CLOUD].astype(bool)
+    is_land = img[:, :, Channel.IS_LAND] > 0  # make land masked based on DEM
     not_cloud_land = (~is_cloud) & (~is_land)
     img = np.concatenate([img, not_cloud_land[:, :, None]], axis=2)
-    img[:, :, 6] = is_land
+    img[:, :, Channel.IS_LAND] = is_land
 
     # Load mask (if present)
     if fpath_mask is None:
