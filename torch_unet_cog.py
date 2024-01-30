@@ -12,6 +12,7 @@ import torch.optim
 import torchmetrics
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
+import pytorch_toolbelt.losses
 
 import trafos
 from data import KelpDataset, split_train_test_val
@@ -100,10 +101,10 @@ class MultiTaskUNet(nn.Module):
             nn.Linear(16 * 16 * 1024, 256),
             nn.Dropout(0.2),
             nn.ReLU(),
-            nn.Linear(256, 16),
+            nn.Linear(256, 32),
             nn.Dropout(0.2),
             nn.ReLU(),
-            nn.Linear(16, n_regr_out),
+            nn.Linear(32, n_regr_out),
         )
 
     def forward(self, inputs, task: Task):
@@ -139,8 +140,10 @@ class LitMTUNet(L.LightningModule):
     def __init__(self, n_ch, n_regr_out):
         super().__init__()
         self.model = MultiTaskUNet(n_ch=n_ch, n_regr_out=n_regr_out)
-        self.criterion_segm = nn.BCEWithLogitsLoss(
-            pos_weight=torch.tensor([40]))  # Kelp is rare, so we weight it higher.
+        self.criterion_segm = pytorch_toolbelt.losses.DiceLoss(
+            mode="binary",
+            from_logits=True,
+        )
         self.criterion_regr = nn.MSELoss()
         self.dice =  torchmetrics.Dice()
 

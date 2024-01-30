@@ -36,7 +36,7 @@ def get_tiff_profile():
 
 if __name__ == "__main__":
     # Load model
-    ckpt_path = pathlib.Path("lightning_logs/version_10/checkpoints/epoch=49-step=6200.ckpt")
+    ckpt_path = pathlib.Path("/home/max/projects/kelp/lightning_logs/version_20/checkpoints/epoch=11-step=1488.ckpt")
     unet = LitMTUNet.load_from_checkpoint(ckpt_path, n_ch=11, n_regr_out=2)
 
     # Load data
