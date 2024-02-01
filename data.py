@@ -1,6 +1,6 @@
 import enum
 import torch
-from typing import Optional
+from typing import Optional, List, Self
 import pathlib
 import numpy as np
 import rasterio
@@ -24,20 +24,42 @@ class Channel(enum.IntEnum):
     NDWI_2 = 9
     NDVI = 10
 
+    @classmethod
+    @property
+    def masks(cls) -> List[Self]:
+        """Binary masks"""
+        return [cls.IS_CLOUD, cls.IS_LAND, cls.NOT_CLOUD_LAND]
+
+    @classmethod
+    @property
+    def bands(cls) -> List[Self]:
+        """Default bands"""
+        return [cls.SWIR, cls.NIR, cls.R, cls.G, cls.B]
+
+    @classmethod
+    @property
+    def indices(cls) -> List[Self]:
+        """Remote sensing indices"""
+        return [cls.NDWI_1, cls.NDWI_2, cls.NDVI]
+
 
 def load_img(fpath_img: str, fpath_mask: Optional[str]):
     """Read image from file and return as float32 tensor"""
     # Load image
     img = rasterio.open(fpath_img).read().astype(np.float32)
     img = np.rollaxis(img, 0, 3)  # tf expects channels in last dimension
-    img[:, :, :5] = img[:, :, :5] / 65536.  # scale bands to [0, 1]
+    img[:, :, :5] = img[:, :, :5] / 65536.0  # scale bands to [0, 1]
 
-    # I assume, detection only possible when not cloudy and not land
     is_cloud = img[:, :, Channel.IS_CLOUD].astype(bool)
     is_land = img[:, :, Channel.IS_LAND] > 0  # make land masked based on DEM
+    img[:, :, Channel.IS_LAND] = is_land
+
+    # I assume, detection only possible when not cloudy and not land
     not_cloud_land = (~is_cloud) & (~is_land)
     img = np.concatenate([img, not_cloud_land[:, :, None]], axis=2)
-    img[:, :, Channel.IS_LAND] = is_land
+
+    # Set negative values to NaN for now, but they need to be filled before training!
+    img = np.where(img < 0, np.nan, img)
 
     # Load mask (if present)
     if fpath_mask is None:
@@ -94,8 +116,9 @@ class KelpDataset(Dataset):
 
 
 class MultiTaskKelpDataset(KelpDataset):
-    def __init__(self, img_dir: str, mask_dir: Optional[str], cog_path: Optional[str],
-                 dir_mask: Optional[np.ndarray] = None):
+    def __init__(
+        self, img_dir: str, mask_dir: Optional[str], cog_path: Optional[str], dir_mask: Optional[np.ndarray] = None
+    ):
         super().__init__(img_dir, mask_dir, dir_mask)
 
         if cog_path is None:
@@ -125,5 +148,5 @@ class MultiTaskKelpDataset(KelpDataset):
 def split_train_test_val(ds: KelpDataset, seed=42):
     """Split data into train (70%), validation (15%) and test (15%) set."""
     gen = torch.Generator().manual_seed(seed)
-    ds_train, ds_val, ds_test = torch.utils.data.random_split(ds, [.7, .15, .15], generator=gen)
+    ds_train, ds_val, ds_test = torch.utils.data.random_split(ds, [0.7, 0.15, 0.15], generator=gen)
     return ds_train, ds_val, ds_test
