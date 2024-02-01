@@ -145,11 +145,12 @@ class LitMTUNet(L.LightningModule):
             from_logits=True,
         )
         self.criterion_regr = nn.MSELoss()
-        self.dice =  torchmetrics.Dice()
+        self.dice = torchmetrics.Dice()
 
     def _shared_step(self, batch, prefix: str):
         x, (y_seg, y_rgr) = batch
-        x_valid = torch.where(x[:, 0, :, :] < 0, 0, 1)  # mask for NaN values, to zero them for loss computation
+        x_valid = torch.where(torch.isnan(x).any(dim=1), 0, 1)  # 0 where any channel is NaN, 1 otherwise
+        x = torch.nan_to_num(x, nan=-1)  # NaNs are set to 0
 
         # Segmentation
         y_hat_seg = self.model(x, task=Task.SEGMENTATION)
@@ -166,7 +167,7 @@ class LitMTUNet(L.LightningModule):
         self.log(f"{prefix}_loss_regr", loss_rgr)
 
         # Combine losses
-        w_seg = 0.5
+        w_seg = 0.2
         w_rgr = 1 - w_seg
         loss = w_seg * loss_seg + w_rgr * loss_rgr
         self.log(f"{prefix}_loss_joint", loss)
@@ -201,6 +202,9 @@ class LitMTUNet(L.LightningModule):
         """Add transformations that are to training dataset"""
         # Image trafos
         ds.add_transform(trafos.add_rs_indices)
+        ds.add_transform(trafos.center_channels)
+        # ds.add_transform(trafos.fill_nans)
+        ds.add_transform(trafos.downsample)
         ds.add_transform(trafos.augment)  # Random augmentation only during training!
         ds.add_transform(trafos.channel_first)
 
@@ -227,7 +231,9 @@ class LitMTUNet(L.LightningModule):
     def apply_infer_trafos(cls, ds: KelpDataset) -> None:
         """Add transformations for inference (no random rotations and no multi-task output)"""
         ds.add_transform(trafos.add_rs_indices)
-        ds.add_transform(trafos.downsample)  # Downsample for validation and testing
+        ds.add_transform(trafos.center_channels)
+        # ds.add_transform(trafos.fill_nans)
+        ds.add_transform(trafos.downsample)
         ds.add_transform(trafos.channel_first)
         ds.add_transform(trafos.to_tensor)
         ds.add_transform(lambda X, y: (X, y.float()))  # y is float for BCELoss
