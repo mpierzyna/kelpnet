@@ -1,6 +1,7 @@
 data/*
 !data/kelp_cog.csv
 lightning_logs
+data_inpainted
 
 
 .idea
