@@ -29,28 +29,31 @@ class Task(enum.IntEnum):
 
 
 class ConvBlock(nn.Module):
-    def __init__(self, in_c, out_c):
+    def __init__(self, in_c, out_c, p_dropout: float):
         super().__init__()
         self.conv1 = nn.Conv2d(in_c, out_c, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(out_c)
         self.conv2 = nn.Conv2d(out_c, out_c, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(out_c)
         self.relu = nn.ReLU()
+        self.du = nn.Dropout2d(p=p_dropout)
 
     def forward(self, inputs):
         x = self.conv1(inputs)
         x = self.bn1(x)
         x = self.relu(x)
+        x = self.du(x)
         x = self.conv2(x)
         x = self.bn2(x)
         x = self.relu(x)
+        x = self.du(x)
         return x
 
 
 class EncoderBlock(nn.Module):
-    def __init__(self, in_c, out_c):
+    def __init__(self, in_c, out_c, p_dropout: float):
         super().__init__()
-        self.conv = ConvBlock(in_c, out_c)
+        self.conv = ConvBlock(in_c, out_c, p_dropout=p_dropout)
         self.pool = nn.MaxPool2d((2, 2))
 
     def forward(self, inputs):
@@ -60,10 +63,10 @@ class EncoderBlock(nn.Module):
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, in_c, out_c):
+    def __init__(self, in_c, out_c, p_dropout: float):
         super().__init__()
         self.up = nn.ConvTranspose2d(in_c, out_c, kernel_size=2, stride=2, padding=0)
-        self.conv = ConvBlock(out_c + out_c, out_c)
+        self.conv = ConvBlock(out_c + out_c, out_c, p_dropout=p_dropout)
 
     def forward(self, inputs, skip):
         x = self.up(inputs)
@@ -75,21 +78,22 @@ class DecoderBlock(nn.Module):
 class MultiTaskUNet(nn.Module):
     def __init__(self, n_ch, n_regr_out):
         super().__init__()
+        p_dropout = 0.0
 
         # Encoder (halfs image dimensions, doubles channels)
-        self.e1 = EncoderBlock(n_ch, 64)
-        self.e2 = EncoderBlock(64, 128)
-        self.e3 = EncoderBlock(128, 256)
-        self.e4 = EncoderBlock(256, 512)
+        self.e1 = EncoderBlock(n_ch, 64, p_dropout)
+        self.e2 = EncoderBlock(64, 128, p_dropout)
+        self.e3 = EncoderBlock(128, 256, p_dropout)
+        self.e4 = EncoderBlock(256, 512, p_dropout)
 
         # Bottleneck (only doubles channels)
-        self.b = ConvBlock(512, 1024)
+        self.b = ConvBlock(512, 1024, p_dropout)
 
         # Task 1: Segmentation Decoder
-        self.d1 = DecoderBlock(1024, 512)
-        self.d2 = DecoderBlock(512, 256)
-        self.d3 = DecoderBlock(256, 128)
-        self.d4 = DecoderBlock(128, 64)
+        self.d1 = DecoderBlock(1024, 512, p_dropout)
+        self.d2 = DecoderBlock(512, 256, p_dropout)
+        self.d3 = DecoderBlock(256, 128, p_dropout)
+        self.d4 = DecoderBlock(128, 64, p_dropout)
 
         # Task 1: Segmentation Classifier
         self.outputs = nn.Conv2d(64, 1, kernel_size=1, padding=0)
@@ -128,6 +132,7 @@ class MultiTaskUNet(nn.Module):
             # No sigmoid here, because we use BCEWithLogitsLoss
             outputs = self.outputs(d4)
             outputs = outputs.squeeze(1)  # remove channel dimension since we only have one channel
+            outputs = self.sigmoid(outputs)
             return outputs
         elif task == Task.REGRESSION:
             # Regression
@@ -142,23 +147,24 @@ class LitMTUNet(L.LightningModule):
         self.model = MultiTaskUNet(n_ch=n_ch, n_regr_out=n_regr_out)
         self.criterion_segm = pytorch_toolbelt.losses.DiceLoss(
             mode="binary",
-            from_logits=True,
+            from_logits=False,
         )
         self.criterion_regr = nn.MSELoss()
-        self.dice =  torchmetrics.Dice()
+        self.dice = torchmetrics.Dice()
 
     def _shared_step(self, batch, prefix: str):
         x, (y_seg, y_rgr) = batch
         x_valid = torch.where(x[:, 0, :, :] < 0, 0, 1)  # mask for NaN values, to zero them for loss computation
 
         # Segmentation
-        y_hat_seg = self.model(x, task=Task.SEGMENTATION)
         if prefix == "train":
+            y_hat_seg = self.model(x, task=Task.SEGMENTATION)
             loss_seg = self.criterion_segm(y_hat_seg * x_valid, y_seg * x_valid)
         else:
+            y_hat_seg = self._predict_seg_ens(x)
             loss_seg = self.criterion_segm(y_hat_seg, y_seg)
         self.log(f"{prefix}_loss_seg", loss_seg)
-        self.log(f"{prefix}_dice_seg", self.dice(self.model.sigmoid(y_hat_seg), y_seg.int()))
+        self.log(f"{prefix}_dice_seg", self.dice(y_hat_seg, y_seg.int()))
 
         # Regression
         y_hat_rgr = self.model(x, task=Task.REGRESSION)
@@ -166,7 +172,7 @@ class LitMTUNet(L.LightningModule):
         self.log(f"{prefix}_loss_regr", loss_rgr)
 
         # Combine losses
-        w_seg = 0.5
+        w_seg = 1
         w_rgr = 1 - w_seg
         loss = w_seg * loss_seg + w_rgr * loss_rgr
         self.log(f"{prefix}_loss_joint", loss)
@@ -177,16 +183,36 @@ class LitMTUNet(L.LightningModule):
         return self._shared_step(batch, "train")
 
     def validation_step(self, batch, batch_idx):
-        self._shared_step(batch, "val")
+        return self._shared_step(batch, "val")
 
     def test_step(self, batch, batch_idx):
-        self._shared_step(batch, "test")
+        return self._shared_step(batch, "test")
+
+    def _predict_seg_ens(self, x):
+        y_hat_seg = None
+        for k in [0, 1, 2, 3]:
+            # Rotate 90 degrees every time (k=1) -> adds up
+            x = torch.rot90(x, k=1, dims=[2, 3])
+
+            # Predict on rotated x (result is already sigmoid)
+            y_hat_seg_i = self.model(x, task=Task.SEGMENTATION)
+
+            if y_hat_seg is None:
+                y_hat_seg = y_hat_seg_i
+            else:
+                # Rotate prediction back and add up. K=-k because we need to rotate back to original state.
+                y_hat_seg += torch.rot90(y_hat_seg_i, k=-k, dims=[1, 2])
+
+        # Average
+        y_hat_seg /= 4
+        return y_hat_seg
 
     def predict_step(self, batch, batch_idx):
         x, _ = batch
-        y_hat_seg = self.model(x, task=Task.SEGMENTATION)
-        y_hat_seg = torch.sigmoid(y_hat_seg)  # Now apply sigmoid because inference
+        # Get ensemble segmentation output
+        y_hat_seg = self._predict_seg_ens(x)
 
+        # Get regression output
         y_hat_rgr = self.model(x, task=Task.REGRESSION)
 
         return y_hat_seg, y_hat_rgr

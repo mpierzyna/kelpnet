@@ -62,6 +62,7 @@ def augment(img, mask):
     res = aug_pipeline(image=img, mask=mask)
     return res["image"], res["mask"]
 
+
 def channel_first(img, mask):
     """Torch wants channels first. Apply last!"""
     return np.rollaxis(img, 2, 0), mask
