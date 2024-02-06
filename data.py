@@ -51,6 +51,11 @@ def load_img(fpath_img: str, fpath_mask: Optional[str]):
 
 class KelpDataset(Dataset):
     def __init__(self, img_dir: str, mask_dir: Optional[str], dir_mask: Optional[np.ndarray] = None):
+        # Store input params
+        self.img_dir = img_dir
+        self.mask_dir = mask_dir
+        self.dir_mask = dir_mask
+
         # List images (X)
         img_list = sorted(pathlib.Path(img_dir).glob("*.tif"))
 
@@ -126,4 +131,36 @@ def split_train_test_val(ds: KelpDataset, seed=42):
     """Split data into train (70%), validation (15%) and test (15%) set."""
     gen = torch.Generator().manual_seed(seed)
     ds_train, ds_val, ds_test = torch.utils.data.random_split(ds, [.7, .15, .15], generator=gen)
+    return ds_train, ds_val, ds_test
+
+
+def split_train_test_val2(ds: KelpDataset, seed=42):
+    """Split dataset by index, so sub datasets are subclass of KelpDataset. That allows to individually apply trafos."""
+    # Randomly shuffle dataset indices
+    rng = np.random.default_rng(seed=seed)
+    n = len(ds)
+    inds = np.arange(n)
+    rng.shuffle(inds)  # shuffle indices place
+
+    # Train indices
+    n_train = np.round(n * .7).astype(int)
+    inds_train = inds[:n_train]
+    inds_val_test = inds[n_train:]
+
+    # Val and test indices
+    n_val = (n - n_train) // 2
+    inds_val = inds_val_test[:n_val]
+    inds_test = inds_val_test[n_val:]
+
+    # Make them all into masks
+    inds = np.arange(n)  # new ordered index array
+    mask_train = np.isin(inds, inds_train)
+    mask_val = np.isin(inds, inds_val)
+    mask_test = np.isin(inds, inds_test)
+
+    # Apply masks to dataset
+    ds_train = KelpDataset(img_dir=ds.img_dir, mask_dir=ds.mask_dir, dir_mask=mask_train)
+    ds_val = KelpDataset(img_dir=ds.img_dir, mask_dir=ds.mask_dir, dir_mask=mask_val)
+    ds_test = KelpDataset(img_dir=ds.img_dir, mask_dir=ds.mask_dir, dir_mask=mask_test)
+
     return ds_train, ds_val, ds_test
