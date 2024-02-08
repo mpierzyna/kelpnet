@@ -5,8 +5,12 @@ import pathlib
 import numpy as np
 import rasterio
 import pandas as pd
+import logging
 
 from torch.utils.data import Dataset
+
+
+logger = logging.getLogger("kelp")
 
 
 class Channel(enum.IntEnum):
@@ -28,6 +32,7 @@ class Channel(enum.IntEnum):
 def load_img(fpath_img: str, fpath_mask: Optional[str]):
     """Read image from file and return as float32 tensor"""
     # Load image
+    logger.debug(f"Loading {fpath_img} and {fpath_mask}")
     img = rasterio.open(fpath_img).read().astype(np.float32)
     img = np.rollaxis(img, 0, 3)  # tf expects channels in last dimension
     img[:, :, :5] = img[:, :, :5] / 65536.  # scale bands to [0, 1]
@@ -38,6 +43,10 @@ def load_img(fpath_img: str, fpath_mask: Optional[str]):
     not_cloud_land = (~is_cloud) & (~is_land)
     img = np.concatenate([img, not_cloud_land[:, :, None]], axis=2)
     img[:, :, Channel.IS_LAND] = is_land
+
+    # For debugging
+    if np.any(img < 0):
+        raise ValueError(f"Negative values in {fpath_img}")
 
     # Load mask (if present)
     if fpath_mask is None:
@@ -91,7 +100,10 @@ class KelpDataset(Dataset):
     def __getitem__(self, idx):
         img, mask = load_img(self.img_list[idx], self.mask_list[idx])
         for tf in self.transforms:
+            logger.debug(f"Applying {tf.__name__} to {idx}")
             img, mask = tf(img, mask)
+            if np.isnan(img).sum() > 0:
+                logger.warning(f"NaNs after {tf.__name__} in {idx}")
         return img, mask
 
     def add_transform(self, tf):

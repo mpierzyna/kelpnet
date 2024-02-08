@@ -10,6 +10,7 @@ import lion_pytorch
 import torchmetrics
 import warnings
 import pandas as pd
+import logging
 
 from data import KelpDataset, split_train_test_val2
 import trafos
@@ -18,6 +19,11 @@ import trafos
 torch.set_float32_matmul_precision("high")
 # Reading dataset raises warnings, which are anoying
 warnings.filterwarnings("ignore", category=rasterio.errors.NotGeoreferencedWarning)
+
+# Setup logging
+logger = logging.getLogger("kelp")
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("rasterio").setLevel(logging.ERROR)
 
 
 class DeepLabV3(nn.Module):
@@ -35,7 +41,7 @@ class DeepLabV3(nn.Module):
         output = self.model(x)["out"]
 
         # remove channel dimension since we only have one channel
-        output = output.squeeze(1)  
+        output = output.squeeze(1)
 
         # Apply sigmoid activation for binary classification
         return torch.sigmoid(output)
@@ -80,7 +86,7 @@ class LitDeepLabV3(L.LightningModule):
     def predict_step(self, batch, batch_idx):
         x, _ = batch
         y_hat = self.model(x)
-        return y_hat > .5
+        return y_hat > 0.5
 
     def configure_optimizers(self):
         opt = lion_pytorch.Lion(self.parameters(), lr=1e-4)
@@ -88,9 +94,13 @@ class LitDeepLabV3(L.LightningModule):
 
 
 def apply_train_trafos(ds: KelpDataset) -> None:
-    aug_pipeline = A.Compose([
-        A.HorizontalFlip()
-    ])
+    aug_pipeline = A.Compose(
+        [
+            A.HorizontalFlip(),
+            # A.VerticalFlip(),
+            # A.ChannelDropout(p=.1, fill_value=0),
+        ]
+    )
 
     def apply_aug(img, mask):
         res = aug_pipeline(image=img, mask=mask)
@@ -128,7 +138,7 @@ def get_loaders(kf_weighing: bool, **loader_kwargs):
     if kf_weighing:
         # Use kelp fraction as sampling weights
         df_quality = pd.read_csv("quality.csv", index_col=0)
-        kf = (df_quality["kelp_fraction"] + .05) / .2
+        kf = (df_quality["kelp_fraction"] + 0.05) / 0.2
         kf[kf > 1] = 0
 
         # Train loader with weighted random sampling
@@ -145,7 +155,26 @@ def get_loaders(kf_weighing: bool, **loader_kwargs):
     return train_loader, val_loader, test_loader
 
 
+def test_loaders():
+    """Iterate through loaders to check if they work"""
+    train_loader, val_loader, test_loader = get_loaders(num_workers=1, batch_size=32, kf_weighing=False)
+
+    # Test loaders
+    print("Testing loaders")
+    for loader in [train_loader, val_loader, test_loader]:
+        for x, y in loader:
+            print(x.shape, y.shape)
+
+    print("Done. Exiting")
+
+    import sys
+
+    sys.exit(0)
+
+
 if __name__ == "__main__":
+    # test_loaders()
+
     train_loader, val_loader, test_loader = get_loaders(num_workers=8, batch_size=32, kf_weighing=False)
 
     # Train

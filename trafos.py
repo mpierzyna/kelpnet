@@ -1,25 +1,31 @@
 """
 REMEMBER THAT MASK CAN BE `None`!
 """
+
 import numba
 import torch
 import numpy as np
 import cv2
 import albumentations as A
+import logging
 
 from data import Channel as Ch
+
+logger = logging.getLogger("kelp")
 
 
 def if_mask_valid(fn):
     """If mask is `None`, wrapped function is not applied and mask is returned as is."""
+
     def wrapper(mask, *args, **kwargs):
         if mask is None:
             return mask
         return fn(mask, *args, **kwargs)
+
     return wrapper
 
 
-@numba.njit(cache=True)
+# @numba.njit(cache=True)
 def add_rs_indices(img, mask):
     """0: SWIR, 1: NIR, 2: R, 3: G, 4: B"""
     swir = img[:, :, Ch.SWIR.value]
@@ -31,14 +37,19 @@ def add_rs_indices(img, mask):
     ndwi_1 = (g - nir) / (g + nir)
     ndwi_2 = (nir - swir) / (nir + swir)
     ndvi = (nir - r) / (nir + r)
-    
+
     # Preallocate new array with new channels (for numba)
     ni, nj, nch = img.shape
-    img_new = np.zeros((ni, nj, nch+3), dtype=img.dtype)
-    img_new[:, :, :Ch.NDWI_1.value] = img
+    img_new = np.zeros((ni, nj, nch + 3), dtype=img.dtype)
+    img_new[:, :, : Ch.NDWI_1.value] = img
     img_new[:, :, Ch.NDWI_1.value] = ndwi_1
     img_new[:, :, Ch.NDWI_2.value] = ndwi_2
     img_new[:, :, Ch.NDVI.value] = ndvi
+
+    # If any of the rs indices caused inf due to division by zero fill with zero
+    if (nan_count := np.isnan(img_new).sum() + np.isinf(img_new).sum()) > 0:
+        logger.debug(f"Found {nan_count} NaN or inf values in rs indices. Filling with 0.")
+        img_new = np.nan_to_num(img_new, nan=0, posinf=0, neginf=0)
 
     return img_new, mask
 
@@ -50,11 +61,15 @@ def downsample(img, mask):
     return img, mask
 
 
-aug_pipeline = A.Compose([
-    A.Rotate(border_mode=cv2.BORDER_CONSTANT, value=-1, p=0.5),  # -1 is nan effectively and will be ignored in loss
-    A.RandomCrop(256, 256, p=1),  # always crop to have dataset of same size
-    A.HorizontalFlip(),
-])
+aug_pipeline = A.Compose(
+    [
+        A.Rotate(
+            border_mode=cv2.BORDER_CONSTANT, value=-1, p=0.5
+        ),  # -1 is nan effectively and will be ignored in loss
+        A.RandomCrop(256, 256, p=1),  # always crop to have dataset of same size
+        A.HorizontalFlip(),
+    ]
+)
 
 
 def augment(img, mask):
