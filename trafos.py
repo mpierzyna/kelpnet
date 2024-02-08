@@ -10,6 +10,7 @@ import albumentations as A
 import logging
 
 from data import Channel as Ch
+from utils import compute_scaled_fft2
 
 logger = logging.getLogger("kelp")
 
@@ -91,6 +92,18 @@ def to_tensor(img, mask):
     else:
         mask = torch.tensor(mask, dtype=torch.uint8)
     return torch.tensor(img, dtype=torch.float32), mask
+
+
+def add_fft2_ch(img, mask):
+    nir_ft = compute_scaled_fft2(img[:, :, Ch.NIR.value]) / 20
+    swir_ft = compute_scaled_fft2(img[:, :, Ch.SWIR.value]) / 20
+    ndwi_1_ft = compute_scaled_fft2(img[:, :, Ch.NDWI_1.value]) / 20
+    ndvi_ft = compute_scaled_fft2(img[:, :, Ch.NDVI.value]) / 20
+
+    # Stack new channels
+    img = np.dstack((img, nir_ft, swir_ft, ndwi_1_ft, ndvi_ft))
+
+    return img, mask
 
 
 if __name__ == "__main__":
