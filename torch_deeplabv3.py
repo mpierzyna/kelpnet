@@ -11,6 +11,7 @@ import torchmetrics
 import warnings
 import pandas as pd
 import logging
+import numpy as np
 
 from data import KelpDataset, split_train_test_val2
 import trafos
@@ -48,13 +49,16 @@ class DeepLabV3(nn.Module):
 
 
 class LitDeepLabV3(L.LightningModule):
-    def __init__(self, n_ch: int):
+    def __init__(self, n_ch: int, ens_prediction: bool):
         super().__init__()
         self.model = DeepLabV3(n_ch=n_ch)
         self.crit = pytorch_toolbelt.losses.DiceLoss(mode="binary", from_logits=False)
 
         # Additional metrics
         self.dice = torchmetrics.Dice()
+
+        # Ensemble prediction flag
+        self.ens_prediction = ens_prediction
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -67,10 +71,36 @@ class LitDeepLabV3(L.LightningModule):
 
         return loss
 
+    def _ens_predict(self, x):
+        """Make ensemble prediction by rotating BATCH x 90 degrees and averaging the predictions"""
+        y_hat_ens = []
+        for k in [0, 1, 2, 3]:
+            # Make prediction on rotated x and rotate back (First x not yet rotated)
+            y_hat = self.model(x)
+            y_hat = torch.rot90(y_hat, k=-k, dims=[1, 2])
+            y_hat_ens.append(y_hat)
+
+            # Rotate 90 degrees for next iteration. Happens everytime (k=1) -> adds up
+            x = torch.rot90(x, k=1, dims=[2, 3])
+
+        # Stack and return statistics
+        y_hat_ens = torch.stack(y_hat_ens)
+        return y_hat_ens.mean(dim=0), y_hat_ens.std(dim=0)
+
     def _shared_eval_step(self, batch, batch_idx, prefix: str):
         x, y = batch
 
-        y_hat = self.model(x)
+        if self.ens_prediction:
+            y_hat, y_hat_std = self._ens_predict(x)
+            
+            # Compute and log std on non-zero values only
+            y_hat_std = y_hat_std.flatten()
+            y_hat_std = y_hat_std[y_hat_std > 0]
+            y_hat_nz_std = torch.std(y_hat_std)
+            self.log(f"{prefix}_nz_std", y_hat_nz_std)
+        else:
+            y_hat = self.model(x)
+
         loss = self.crit(y_hat, y)
         self.log(f"{prefix}_loss", loss)
         self.log(f"{prefix}_dice", self.dice(y_hat, y.int()))
@@ -85,8 +115,12 @@ class LitDeepLabV3(L.LightningModule):
 
     def predict_step(self, batch, batch_idx):
         x, _ = batch
-        y_hat = self.model(x)
-        return y_hat > 0.5
+        if self.ens_prediction:
+            y_hat, y_hat_std = self._ens_predict(x)
+        else:
+            y_hat = self.model(x)
+        y_hat = y_hat > .5
+        return y_hat
 
     def configure_optimizers(self):
         opt = lion_pytorch.Lion(self.parameters(), lr=1e-4)
