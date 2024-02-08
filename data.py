@@ -27,6 +27,10 @@ class Channel(enum.IntEnum):
     NDWI_1 = 8
     NDWI_2 = 9
     NDVI = 10
+    GNDVI = 11
+    NDTI = 12
+    EVI = 13
+    CARI = 14
 
 
 def load_img(fpath_img: str, fpath_mask: Optional[str]):

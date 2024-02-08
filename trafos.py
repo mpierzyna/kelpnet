@@ -40,14 +40,22 @@ def add_rs_indices(img, mask):
         ndwi_1 = (g - nir) / (g + nir)
         ndwi_2 = (nir - swir) / (nir + swir)
         ndvi = (nir - r) / (nir + r)
+        gndvi = (nir - g) / (nir + g)
+        ndti = (r - g) / (r + g)
+        evi = 2.5 * (nir - r) / (nir + 6 * r - 7.5 * b + 1)
+        cari = ((nir - r) / (nir + r)) - ((nir - g) / (nir + g))
 
     # Preallocate new array with new channels (for numba)
     ni, nj, nch = img.shape
-    img_new = np.zeros((ni, nj, nch + 3), dtype=img.dtype)
+    img_new = np.zeros((ni, nj, nch + 5), dtype=img.dtype)
     img_new[:, :, : Ch.NDWI_1.value] = img
     img_new[:, :, Ch.NDWI_1.value] = ndwi_1
     img_new[:, :, Ch.NDWI_2.value] = ndwi_2
     img_new[:, :, Ch.NDVI.value] = ndvi
+    img_new[:, :, Ch.GNDVI.value] = gndvi
+    img_new[:, :, Ch.NDTI.value] = ndti
+    # img_new[:, :, Ch.EVI.value] = evi
+    # img_new[:, :, Ch.CARI.value] = cari
 
     # If any of the rs indices caused inf due to division by zero fill with zero
     if (nan_count := np.isnan(img_new).sum() + np.isinf(img_new).sum()) > 0:

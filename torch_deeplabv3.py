@@ -34,8 +34,9 @@ def drop_channels(img, mask):
     """Drop channels with low importance from img.
     Expects channels in last dimension.
     """
+    _, _, n_ch = img.shape
     to_drop = [Ch.R, Ch.G, Ch.B, Ch.IS_CLOUD]
-    to_keep = [ch for ch in Ch if ch not in to_drop]
+    to_keep = [ch for ch in range(n_ch) if ch not in to_drop]
     img = img[:, :, to_keep]
     return img, mask
 
@@ -80,8 +81,8 @@ class LitDeepLabV3(L.LightningModule):
 
         y_hat = self.model(x)
         loss = self.crit(y_hat, y)
-        self.log("train_loss", loss)
-        self.log("train_dice", self.dice(y_hat, y.int()))
+        self.log("train_loss", loss, sync_dist=True)
+        self.log("train_dice", self.dice(y_hat, y.int()), sync_dist=True)
 
         return loss
 
@@ -111,13 +112,13 @@ class LitDeepLabV3(L.LightningModule):
             y_hat_std = y_hat_std.flatten()
             y_hat_std = y_hat_std[y_hat_std > 0]
             y_hat_nz_std = torch.mean(y_hat_std)
-            self.log(f"{prefix}_nz_std", y_hat_nz_std)
+            self.log(f"{prefix}_nz_std", y_hat_nz_std, sync_dist=True)
         else:
             y_hat = self.model(x)
 
         loss = self.crit(y_hat, y)
-        self.log(f"{prefix}_loss", loss)
-        self.log(f"{prefix}_dice", self.dice(y_hat, y.int()))
+        self.log(f"{prefix}_loss", loss, sync_dist=True)
+        self.log(f"{prefix}_dice", self.dice(y_hat, y.int()), sync_dist=True)
 
         return loss
 
@@ -155,6 +156,7 @@ def apply_train_trafos(ds: KelpDataset) -> None:
         return res["image"], res["mask"]
 
     ds.add_transform(trafos.add_rs_indices)
+    # ds.add_transform(trafos.add_fft2_ch)
     ds.add_transform(drop_channels)
     ds.add_transform(apply_aug)  # Random augmentation only during training!
     ds.add_transform(trafos.channel_first)
@@ -163,6 +165,7 @@ def apply_train_trafos(ds: KelpDataset) -> None:
 
 def apply_infer_trafos(ds: KelpDataset) -> None:
     ds.add_transform(trafos.add_rs_indices)
+    # ds.add_transform(trafos.add_fft2_ch)
     ds.add_transform(drop_channels)
     ds.add_transform(trafos.channel_first)
     ds.add_transform(trafos.to_tensor)
@@ -228,10 +231,10 @@ if __name__ == "__main__":
     train_loader, val_loader, test_loader = get_loaders(num_workers=8, batch_size=32, kf_weighing=False)
 
     # Train
-    model = LitDeepLabV3(n_ch=7, ens_prediction=True)
+    model = LitDeepLabV3(n_ch=9, ens_prediction=True)
     trainer = L.Trainer(
-        devices=1,
-        max_epochs=15,
+        # devices=1,
+        max_epochs=20,
         log_every_n_steps=10,
         callbacks=[
             # EarlyStopping(monitor="val_dice", patience=3),
