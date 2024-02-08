@@ -34,9 +34,11 @@ def add_rs_indices(img, mask):
     g = img[:, :, Ch.G.value]
     b = img[:, :, Ch.B.value]
 
-    ndwi_1 = (g - nir) / (g + nir)
-    ndwi_2 = (nir - swir) / (nir + swir)
-    ndvi = (nir - r) / (nir + r)
+    # I expect +- inf due to division by zero and fix them later
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ndwi_1 = (g - nir) / (g + nir)
+        ndwi_2 = (nir - swir) / (nir + swir)
+        ndvi = (nir - r) / (nir + r)
 
     # Preallocate new array with new channels (for numba)
     ni, nj, nch = img.shape

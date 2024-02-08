@@ -54,3 +54,5 @@ def compute_kelp_distr(mask):
     mom /= ((ni * nj) * (ni**2 + nj**2) / 12)  # normalize with mom of full rect
 
     return np.array([i, j, std_dist_i, std_dist_j, mom, mask_area])
+
+

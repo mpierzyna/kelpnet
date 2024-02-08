@@ -35,8 +35,8 @@ def get_tiff_profile():
 
 if __name__ == "__main__":
     # Load model
-    ckpt_path = pathlib.Path("lightning_logs/version_14/checkpoints/epoch=11-step=1488.ckpt")
-    model = dlv3.LitDeepLabV3.load_from_checkpoint(ckpt_path, n_ch=11, ens_prediction=True)
+    ckpt_path = pathlib.Path("lightning_logs/version_19/checkpoints/epoch=14-step=1860.ckpt")
+    model = dlv3.LitDeepLabV3.load_from_checkpoint(ckpt_path, n_ch=7, ens_prediction=True)
 
     # Load data (INPAINTED!)
     ds_sub = KelpDataset(img_dir="data_inpainted/test_satellite/", mask_dir=None)

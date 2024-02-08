@@ -4,6 +4,9 @@ import torch
 from torch import nn
 import torch.utils.data
 import rasterio
+from lightning.pytorch.callbacks.early_stopping import EarlyStopping
+from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
 from torchvision.models.segmentation import deeplabv3_resnet101
 import pytorch_toolbelt.losses
 import lion_pytorch
@@ -11,9 +14,9 @@ import torchmetrics
 import warnings
 import pandas as pd
 import logging
-import numpy as np
 
 from data import KelpDataset, split_train_test_val2
+from data import Channel as Ch
 import trafos
 
 
@@ -25,6 +28,16 @@ warnings.filterwarnings("ignore", category=rasterio.errors.NotGeoreferencedWarni
 logger = logging.getLogger("kelp")
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("rasterio").setLevel(logging.ERROR)
+
+
+def drop_channels(img, mask):
+    """Drop channels with low importance from img.
+    Expects channels in last dimension.
+    """
+    to_drop = [Ch.R, Ch.G, Ch.B, Ch.IS_CLOUD]
+    to_keep = [ch for ch in Ch if ch not in to_drop]
+    img = img[:, :, to_keep]
+    return img, mask
 
 
 class DeepLabV3(nn.Module):
@@ -57,8 +70,9 @@ class LitDeepLabV3(L.LightningModule):
         # Additional metrics
         self.dice = torchmetrics.Dice()
 
-        # Ensemble prediction flag
+        # Store arguments
         self.ens_prediction = ens_prediction
+        self.n_ch = n_ch
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -92,11 +106,11 @@ class LitDeepLabV3(L.LightningModule):
 
         if self.ens_prediction:
             y_hat, y_hat_std = self._ens_predict(x)
-            
+
             # Compute and log std on non-zero values only
             y_hat_std = y_hat_std.flatten()
             y_hat_std = y_hat_std[y_hat_std > 0]
-            y_hat_nz_std = torch.std(y_hat_std)
+            y_hat_nz_std = torch.mean(y_hat_std)
             self.log(f"{prefix}_nz_std", y_hat_nz_std)
         else:
             y_hat = self.model(x)
@@ -123,16 +137,16 @@ class LitDeepLabV3(L.LightningModule):
         return y_hat
 
     def configure_optimizers(self):
-        opt = lion_pytorch.Lion(self.parameters(), lr=1e-4)
-        return opt
+        optimizer = lion_pytorch.Lion(self.parameters(), lr=1e-4)
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
+        return [optimizer], [lr_scheduler]
 
 
 def apply_train_trafos(ds: KelpDataset) -> None:
     aug_pipeline = A.Compose(
         [
             A.HorizontalFlip(),
-            # A.VerticalFlip(),
-            # A.ChannelDropout(p=.1, fill_value=0),
+            A.VerticalFlip(),
         ]
     )
 
@@ -141,6 +155,7 @@ def apply_train_trafos(ds: KelpDataset) -> None:
         return res["image"], res["mask"]
 
     ds.add_transform(trafos.add_rs_indices)
+    ds.add_transform(drop_channels)
     ds.add_transform(apply_aug)  # Random augmentation only during training!
     ds.add_transform(trafos.channel_first)
     ds.add_transform(trafos.to_tensor)
@@ -148,6 +163,7 @@ def apply_train_trafos(ds: KelpDataset) -> None:
 
 def apply_infer_trafos(ds: KelpDataset) -> None:
     ds.add_transform(trafos.add_rs_indices)
+    ds.add_transform(drop_channels)
     ds.add_transform(trafos.channel_first)
     ds.add_transform(trafos.to_tensor)
 
@@ -212,11 +228,15 @@ if __name__ == "__main__":
     train_loader, val_loader, test_loader = get_loaders(num_workers=8, batch_size=32, kf_weighing=False)
 
     # Train
-    model = LitDeepLabV3(n_ch=11)
+    model = LitDeepLabV3(n_ch=7, ens_prediction=True)
     trainer = L.Trainer(
         devices=1,
-        max_epochs=50,
+        max_epochs=15,
         log_every_n_steps=10,
+        callbacks=[
+            # EarlyStopping(monitor="val_dice", patience=3),
+            LearningRateMonitor(logging_interval="epoch")
+        ],
     )
     trainer.fit(
         model=model,
