@@ -34,9 +34,10 @@ def drop_channels(img, mask):
     """Drop channels with low importance from img.
     Expects channels in last dimension.
     """
-    _, _, n_ch = img.shape
-    to_drop = [Ch.R, Ch.G, Ch.B, Ch.IS_CLOUD]
-    to_keep = [ch for ch in range(n_ch) if ch not in to_drop]
+    # _, _, n_ch = img.shape
+    # to_drop = [Ch.R, Ch.G, Ch.B, Ch.IS_CLOUD]
+    # to_keep = [ch for ch in range(n_ch) if ch not in to_drop]
+    to_keep = [0, 1, 2, 6, 8, 9, 10, 11]
     img = img[:, :, to_keep]
     return img, mask
 
@@ -63,7 +64,7 @@ class DeepLabV3(nn.Module):
 
 
 class LitDeepLabV3(L.LightningModule):
-    def __init__(self, n_ch: int, ens_prediction: bool):
+    def __init__(self, n_ch: int, ens_prediction: bool, lr: float = 1e-4, lr_gamma: float = 0.95):
         super().__init__()
         self.model = DeepLabV3(n_ch=n_ch)
         self.crit = pytorch_toolbelt.losses.DiceLoss(mode="binary", from_logits=False)
@@ -71,9 +72,12 @@ class LitDeepLabV3(L.LightningModule):
         # Additional metrics
         self.dice = torchmetrics.Dice()
 
-        # Store arguments
+        # Store arguments (should also be accessible via self.hparams)
+        self.save_hyperparameters()
         self.ens_prediction = ens_prediction
         self.n_ch = n_ch
+        self.lr = lr
+        self.lr_gamma = lr_gamma
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -138,8 +142,8 @@ class LitDeepLabV3(L.LightningModule):
         return y_hat
 
     def configure_optimizers(self):
-        optimizer = lion_pytorch.Lion(self.parameters(), lr=1e-4)
-        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
+        optimizer = lion_pytorch.Lion(self.parameters(), lr=self.lr)
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.lr_gamma)
         return [optimizer], [lr_scheduler]
 
 
@@ -155,7 +159,7 @@ def apply_train_trafos(ds: KelpNCDataset) -> None:
         res = aug_pipeline(image=img, mask=mask)
         return res["image"], res["mask"]
 
-    # ds.add_transform(drop_channels)
+    ds.add_transform(drop_channels)
     ds.add_transform(trafos.xr_to_np)
     ds.add_transform(apply_aug)  # Random augmentation only during training!
     ds.add_transform(trafos.channel_first)
@@ -163,7 +167,7 @@ def apply_train_trafos(ds: KelpNCDataset) -> None:
 
 
 def apply_infer_trafos(ds: KelpNCDataset) -> None:
-    # ds.add_transform(drop_channels)
+    ds.add_transform(drop_channels)
     ds.add_transform(trafos.xr_to_np)
     ds.add_transform(trafos.channel_first)
     ds.add_transform(trafos.to_tensor)
@@ -234,7 +238,7 @@ if __name__ == "__main__":
     train_loader, val_loader, test_loader = get_loaders(num_workers=8, batch_size=32, kf_weighing=False)
 
     # Train
-    model = LitDeepLabV3(n_ch=15, ens_prediction=True)
+    model = LitDeepLabV3(n_ch=8, ens_prediction=True, lr_gamma=.8)
     trainer = L.Trainer(
         # devices=1,
         max_epochs=30,

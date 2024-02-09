@@ -69,7 +69,10 @@ def add_rs_indices(img, mask):
 def xr_to_np(xr_img: xr.DataArray, xr_mask: xr.DataArray):
     """Convert xarray to numpy because KelpNCDataset returns native xarray Dataarrays"""
     img = xr_img.to_numpy()
-    mask = xr_mask.to_numpy()
+    if xr_mask is None:
+        mask = None
+    else:
+        mask = xr_mask.to_numpy()
     return img, mask
 
 

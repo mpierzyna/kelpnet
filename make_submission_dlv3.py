@@ -9,7 +9,7 @@ import numpy as np
 import rasterio
 import torch.utils.data
 
-from data import KelpDataset
+from data import KelpNCDataset
 import torch_deeplabv3 as dlv3
 
 SUBMISSION_ROOT = pathlib.Path("submission")
@@ -35,13 +35,13 @@ def get_tiff_profile():
 
 if __name__ == "__main__":
     # Load model
-    ckpt_path = pathlib.Path("lightning_logs/version_19/checkpoints/epoch=14-step=1860.ckpt")
-    model = dlv3.LitDeepLabV3.load_from_checkpoint(ckpt_path, n_ch=7, ens_prediction=True)
+    ckpt_path = pathlib.Path("lightning_logs/version_47/checkpoints/epoch=29-step=1260.ckpt")
+    model = dlv3.LitDeepLabV3.load_from_checkpoint(ckpt_path, n_ch=8, ens_prediction=True)
 
     # Load data (INPAINTED!)
-    ds_sub = KelpDataset(img_dir="data_inpainted/test_satellite/", mask_dir=None)
+    ds_sub = KelpNCDataset(img_nc_path="data_ncf/test_imgs_fe.nc", mask_nc_path=None)
     dlv3.apply_infer_trafos(ds_sub)
-    ds_sub_loader = torch.utils.data.DataLoader(ds_sub, batch_size=16, num_workers=4)
+    ds_sub_loader = torch.utils.data.DataLoader(ds_sub, batch_size=32, num_workers=4)
 
     # Make predictions (already returned as binary mask)
     trainer = L.Trainer(devices=1, logger=False)
