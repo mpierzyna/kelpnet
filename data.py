@@ -6,6 +6,7 @@ import numpy as np
 import rasterio
 import pandas as pd
 import logging
+import xarray as xr
 
 from torch.utils.data import Dataset
 
@@ -143,6 +144,53 @@ class MultiTaskKelpDataset(KelpDataset):
         self.transforms_cog.append(tf)
 
 
+class KelpNCDataset(Dataset):
+    def __init__(self, img_nc_path: str, mask_nc_path: Optional[str] = None, sample_mask: Optional[np.ndarray] = None):
+        # Open netcdf datasets where one sample with all channels is one chunk
+        chunks = {"sample": 1, "i": None, "j": None, "ch": None}
+
+        self.imgs = xr.open_dataarray(img_nc_path, engine="netcdf4", chunks=chunks)
+        if sample_mask is not None:
+            self.imgs = self.imgs.sel(sample=sample_mask)
+
+        self.masks = None
+        if mask_nc_path is not None:
+            self.masks = xr.open_dataarray(mask_nc_path, engine="netcdf4", chunks=chunks)
+            if sample_mask is not None:
+                self.masks = self.masks.sel(sample=sample_mask)
+
+        # For compatibility with KelpDataset
+        self.tile_ids = self.imgs["sample"].values
+
+        # Save paths
+        self.img_nc_path = img_nc_path
+        self.mask_nc_path = mask_nc_path
+
+        # Store trafos
+        self.transforms = []
+
+    def __len__(self):
+        return len(self.imgs)
+
+    def __getitem__(self, idx):
+        img = self.imgs.isel(sample=idx)
+        if self.masks is None:
+            mask = None
+        else:
+            mask = self.masks.isel(sample=idx)
+
+        for tf in self.transforms:
+            logger.debug(f"Applying {tf.__name__} to {idx}")
+            img, mask = tf(img, mask)
+            if np.isnan(img).sum() > 0:
+                logger.warning(f"NaNs after {tf.__name__} in {idx}")
+
+        return img, mask
+
+    def add_transform(self, tf):
+        self.transforms.append(tf)
+
+
 def split_train_test_val(ds: KelpDataset, seed=42):
     """Split data into train (70%), validation (15%) and test (15%) set."""
     gen = torch.Generator().manual_seed(seed)
@@ -150,11 +198,23 @@ def split_train_test_val(ds: KelpDataset, seed=42):
     return ds_train, ds_val, ds_test
 
 
-def split_train_test_val2(ds: KelpDataset, seed=42):
+def split_train_test_val2(ds: KelpDataset, seed: int = 42):
+    """Split dataset by index, so sub datasets are subclass of KelpDataset. That allows to individually apply trafos."""
+    # Get masks
+    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds), seed)
+
+    # Apply masks to dataset
+    ds_train = KelpDataset(img_dir=ds.img_dir, mask_dir=ds.mask_dir, dir_mask=mask_train)
+    ds_val = KelpDataset(img_dir=ds.img_dir, mask_dir=ds.mask_dir, dir_mask=mask_val)
+    ds_test = KelpDataset(img_dir=ds.img_dir, mask_dir=ds.mask_dir, dir_mask=mask_test)
+
+    return ds_train, ds_val, ds_test
+
+
+def get_train_val_test_masks(n: int, seed: int = 42):
     """Split dataset by index, so sub datasets are subclass of KelpDataset. That allows to individually apply trafos."""
     # Randomly shuffle dataset indices
     rng = np.random.default_rng(seed=seed)
-    n = len(ds)
     inds = np.arange(n)
     rng.shuffle(inds)  # shuffle indices place
 
@@ -174,9 +234,4 @@ def split_train_test_val2(ds: KelpDataset, seed=42):
     mask_val = np.isin(inds, inds_val)
     mask_test = np.isin(inds, inds_test)
 
-    # Apply masks to dataset
-    ds_train = KelpDataset(img_dir=ds.img_dir, mask_dir=ds.mask_dir, dir_mask=mask_train)
-    ds_val = KelpDataset(img_dir=ds.img_dir, mask_dir=ds.mask_dir, dir_mask=mask_val)
-    ds_test = KelpDataset(img_dir=ds.img_dir, mask_dir=ds.mask_dir, dir_mask=mask_test)
-
-    return ds_train, ds_val, ds_test
+    return mask_train, mask_val, mask_test

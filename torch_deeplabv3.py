@@ -7,7 +7,7 @@ import rasterio
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
-from torchvision.models.segmentation import deeplabv3_resnet101
+from torchvision.models.segmentation import deeplabv3_resnet101, deeplabv3_resnet50
 import pytorch_toolbelt.losses
 import lion_pytorch
 import torchmetrics
@@ -15,7 +15,7 @@ import warnings
 import pandas as pd
 import logging
 
-from data import KelpDataset, split_train_test_val2
+from data import KelpDataset, get_train_val_test_masks, KelpNCDataset
 from data import Channel as Ch
 import trafos
 
@@ -46,7 +46,7 @@ class DeepLabV3(nn.Module):
         super().__init__()
 
         # Load a preconfigured DeepLabV3 with one output class
-        self.model = deeplabv3_resnet101(num_classes=1)
+        self.model = deeplabv3_resnet50(num_classes=1)
 
         # Modify the first convolution layer to accept n_ch channels
         self.model.backbone.conv1 = nn.Conv2d(n_ch, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
@@ -134,7 +134,7 @@ class LitDeepLabV3(L.LightningModule):
             y_hat, y_hat_std = self._ens_predict(x)
         else:
             y_hat = self.model(x)
-        y_hat = y_hat > .5
+        y_hat = y_hat > 0.5
         return y_hat
 
     def configure_optimizers(self):
@@ -143,7 +143,7 @@ class LitDeepLabV3(L.LightningModule):
         return [optimizer], [lr_scheduler]
 
 
-def apply_train_trafos(ds: KelpDataset) -> None:
+def apply_train_trafos(ds: KelpNCDataset) -> None:
     aug_pipeline = A.Compose(
         [
             A.HorizontalFlip(),
@@ -155,30 +155,33 @@ def apply_train_trafos(ds: KelpDataset) -> None:
         res = aug_pipeline(image=img, mask=mask)
         return res["image"], res["mask"]
 
-    ds.add_transform(trafos.add_rs_indices)
-    # ds.add_transform(trafos.add_fft2_ch)
-    ds.add_transform(drop_channels)
+    # ds.add_transform(drop_channels)
+    ds.add_transform(trafos.xr_to_np)
     ds.add_transform(apply_aug)  # Random augmentation only during training!
     ds.add_transform(trafos.channel_first)
     ds.add_transform(trafos.to_tensor)
 
 
-def apply_infer_trafos(ds: KelpDataset) -> None:
-    ds.add_transform(trafos.add_rs_indices)
-    # ds.add_transform(trafos.add_fft2_ch)
-    ds.add_transform(drop_channels)
+def apply_infer_trafos(ds: KelpNCDataset) -> None:
+    # ds.add_transform(drop_channels)
+    ds.add_transform(trafos.xr_to_np)
     ds.add_transform(trafos.channel_first)
     ds.add_transform(trafos.to_tensor)
 
 
 def get_dataset():
     # Init dataset but don't apply trafos
-    ds = KelpDataset(img_dir="data_inpainted/train_satellite/", mask_dir="data/train_kelp/")
+    # ds = KelpDataset(img_dir="data_inpainted/train_satellite/", mask_dir="data/train_kelp/")
+    ds = KelpNCDataset(img_nc_path="data_ncf/train_imgs_fe.nc", mask_nc_path="data_ncf/train_masks.ncf")
 
     # Split into sub datasets and apply trafos
-    ds_train, ds_val, ds_test = split_train_test_val2(ds)
+    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds))
+
+    ds_train = KelpNCDataset(img_nc_path=ds.img_nc_path, mask_nc_path=ds.mask_nc_path, sample_mask=mask_train)
     apply_train_trafos(ds_train)
 
+    ds_val = KelpNCDataset(img_nc_path=ds.img_nc_path, mask_nc_path=ds.mask_nc_path, sample_mask=mask_val)
+    ds_test = KelpNCDataset(img_nc_path=ds.img_nc_path, mask_nc_path=ds.mask_nc_path, sample_mask=mask_test)
     apply_infer_trafos(ds_val)
     apply_infer_trafos(ds_test)
 
@@ -231,10 +234,10 @@ if __name__ == "__main__":
     train_loader, val_loader, test_loader = get_loaders(num_workers=8, batch_size=32, kf_weighing=False)
 
     # Train
-    model = LitDeepLabV3(n_ch=9, ens_prediction=True)
+    model = LitDeepLabV3(n_ch=15, ens_prediction=True)
     trainer = L.Trainer(
         # devices=1,
-        max_epochs=20,
+        max_epochs=30,
         log_every_n_steps=10,
         callbacks=[
             # EarlyStopping(monitor="val_dice", patience=3),

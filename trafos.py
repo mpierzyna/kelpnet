@@ -2,6 +2,7 @@
 REMEMBER THAT MASK CAN BE `None`!
 """
 
+import xarray as xr
 import numba
 import torch
 import numpy as np
@@ -47,13 +48,13 @@ def add_rs_indices(img, mask):
 
     # Preallocate new array with new channels (for numba)
     ni, nj, nch = img.shape
-    img_new = np.zeros((ni, nj, nch + 5), dtype=img.dtype)
+    img_new = np.zeros((ni, nj, nch + 4), dtype=img.dtype)
     img_new[:, :, : Ch.NDWI_1.value] = img
     img_new[:, :, Ch.NDWI_1.value] = ndwi_1
     img_new[:, :, Ch.NDWI_2.value] = ndwi_2
     img_new[:, :, Ch.NDVI.value] = ndvi
     img_new[:, :, Ch.GNDVI.value] = gndvi
-    img_new[:, :, Ch.NDTI.value] = ndti
+    # img_new[:, :, Ch.NDTI.value] = ndti
     # img_new[:, :, Ch.EVI.value] = evi
     # img_new[:, :, Ch.CARI.value] = cari
 
@@ -63,6 +64,13 @@ def add_rs_indices(img, mask):
         img_new = np.nan_to_num(img_new, nan=0, posinf=0, neginf=0)
 
     return img_new, mask
+
+
+def xr_to_np(xr_img: xr.DataArray, xr_mask: xr.DataArray):
+    """Convert xarray to numpy because KelpNCDataset returns native xarray Dataarrays"""
+    img = xr_img.to_numpy()
+    mask = xr_mask.to_numpy()
+    return img, mask
 
 
 def downsample(img, mask):
