@@ -1,24 +1,25 @@
+import logging
+import warnings
+
 import albumentations as A
 import lightning as L
-import torch
-from torch import nn
-import torch.utils.data
-import rasterio
-from lightning.pytorch.callbacks.early_stopping import EarlyStopping
-from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
-from torchvision.models.segmentation import deeplabv3_resnet101, deeplabv3_resnet50
-import pytorch_toolbelt.losses
 import lion_pytorch
-import torchmetrics
-import warnings
+import numpy as np
 import pandas as pd
-import logging
+import pytorch_toolbelt.losses
+import rasterio
+import torch
+import torch.utils.data
+import torchmetrics
+from lightning.pytorch.callbacks.early_stopping import EarlyStopping
+from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
+from torch import nn
+from torchvision.models.segmentation import (deeplabv3_resnet50,
+                                             deeplabv3_resnet101)
 
-from data import KelpDataset, get_train_val_test_masks, KelpNCDataset
-from data import Channel as Ch
 import trafos
-
+from data import Channel as Ch
+from data import KelpNCDataset, get_train_val_test_masks
 
 torch.set_float32_matmul_precision("high")
 # Reading dataset raises warnings, which are anoying
@@ -64,7 +65,7 @@ class DeepLabV3(nn.Module):
 
 
 class LitDeepLabV3(L.LightningModule):
-    def __init__(self, n_ch: int, ens_prediction: bool, lr: float = 1e-4, lr_gamma: float = 0.95):
+    def __init__(self, n_ch: int, ens_prediction: bool, lr: float, weight_decay: float, lr_gamma: float):
         super().__init__()
         self.model = DeepLabV3(n_ch=n_ch)
         self.crit = pytorch_toolbelt.losses.DiceLoss(mode="binary", from_logits=False)
@@ -78,6 +79,7 @@ class LitDeepLabV3(L.LightningModule):
         self.n_ch = n_ch
         self.lr = lr
         self.lr_gamma = lr_gamma
+        self.weight_decay = weight_decay
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -142,8 +144,9 @@ class LitDeepLabV3(L.LightningModule):
         return y_hat
 
     def configure_optimizers(self):
-        optimizer = lion_pytorch.Lion(self.parameters(), lr=self.lr)
+        optimizer = lion_pytorch.Lion(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.lr_gamma)
+        # lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
         return [optimizer], [lr_scheduler]
 
 
@@ -152,6 +155,8 @@ def apply_train_trafos(ds: KelpNCDataset) -> None:
         [
             A.HorizontalFlip(),
             A.VerticalFlip(),
+            A.RandomSizedCrop(min_max_height=(200, 350), height=350, width=350, w2h_ratio=1),
+            # A.PixelDropout(dropout_prob=0.01, per_channel=True)
         ]
     )
 
@@ -173,13 +178,13 @@ def apply_infer_trafos(ds: KelpNCDataset) -> None:
     ds.add_transform(trafos.to_tensor)
 
 
-def get_dataset():
+def get_dataset(random_seed: int = 42):
     # Init dataset but don't apply trafos
     # ds = KelpDataset(img_dir="data_inpainted/train_satellite/", mask_dir="data/train_kelp/")
     ds = KelpNCDataset(img_nc_path="data_ncf/train_imgs_fe.nc", mask_nc_path="data_ncf/train_masks.ncf")
 
     # Split into sub datasets and apply trafos
-    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds))
+    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds), random_seed=random_seed)
 
     ds_train = KelpNCDataset(img_nc_path=ds.img_nc_path, mask_nc_path=ds.mask_nc_path, sample_mask=mask_train)
     apply_train_trafos(ds_train)
@@ -192,17 +197,17 @@ def get_dataset():
     return ds_train, ds_val, ds_test
 
 
-def get_loaders(kf_weighing: bool, **loader_kwargs):
-    ds_train, ds_val, ds_test = get_dataset()
+def get_loaders(kf_weighing: bool, random_seed: int = 42, **loader_kwargs):
+    ds_train, ds_val, ds_test = get_dataset(random_seed=random_seed)
 
     if kf_weighing:
         # Use kelp fraction as sampling weights
         df_quality = pd.read_csv("quality.csv", index_col=0)
-        kf = (df_quality["kelp_fraction"] + 0.05) / 0.2
-        kf[kf > 1] = 0
+        kf = df_quality["kelp_fraction"].clip(None, .1).to_numpy()
+        w = 1 + np.power(kf, 1/5)  # Weighting
 
         # Train loader with weighted random sampling
-        w = kf[ds_train.dir_mask].values
+        w = w[ds_train.sample_mask]
         train_sampler = torch.utils.data.WeightedRandomSampler(w, num_samples=len(w), replacement=True)
         train_loader = torch.utils.data.DataLoader(ds_train, sampler=train_sampler, **loader_kwargs)
     else:
@@ -235,16 +240,18 @@ def test_loaders():
 if __name__ == "__main__":
     # test_loaders()
 
-    train_loader, val_loader, test_loader = get_loaders(num_workers=8, batch_size=32, kf_weighing=False)
+    train_loader, val_loader, test_loader = get_loaders(
+        num_workers=8, batch_size=32, kf_weighing=True, random_seed=42
+    )
 
     # Train
-    model = LitDeepLabV3(n_ch=8, ens_prediction=True, lr_gamma=.8)
+    model = LitDeepLabV3(n_ch=8, ens_prediction=True, lr=5e-4, lr_gamma=0.75, weight_decay=1e-1)
     trainer = L.Trainer(
         # devices=1,
         max_epochs=30,
         log_every_n_steps=10,
         callbacks=[
-            # EarlyStopping(monitor="val_dice", patience=3),
+            # EarlyStopping(monitor="val_dice", patience=3, mode="max"),
             LearningRateMonitor(logging_interval="epoch")
         ],
     )

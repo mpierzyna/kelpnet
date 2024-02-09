@@ -162,9 +162,10 @@ class KelpNCDataset(Dataset):
         # For compatibility with KelpDataset
         self.tile_ids = self.imgs["sample"].values
 
-        # Save paths
+        # Store inputs
         self.img_nc_path = img_nc_path
         self.mask_nc_path = mask_nc_path
+        self.sample_mask = sample_mask
 
         # Store trafos
         self.transforms = []
@@ -211,10 +212,10 @@ def split_train_test_val2(ds: KelpDataset, seed: int = 42):
     return ds_train, ds_val, ds_test
 
 
-def get_train_val_test_masks(n: int, seed: int = 42):
+def get_train_val_test_masks(n: int, random_seed: int = 42):
     """Split dataset by index, so sub datasets are subclass of KelpDataset. That allows to individually apply trafos."""
     # Randomly shuffle dataset indices
-    rng = np.random.default_rng(seed=seed)
+    rng = np.random.default_rng(seed=random_seed)
     inds = np.arange(n)
     rng.shuffle(inds)  # shuffle indices place
 
