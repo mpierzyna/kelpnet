@@ -35,8 +35,8 @@ def get_tiff_profile():
 
 if __name__ == "__main__":
     # Load model
-    ckpt_path = pathlib.Path("lightning_logs/version_47/checkpoints/epoch=29-step=1260.ckpt")
-    model = dlv3.LitDeepLabV3.load_from_checkpoint(ckpt_path, n_ch=8, ens_prediction=True)
+    ckpt_path = pathlib.Path("dlv3_ens/dlv3_1a_epoch=15_val_dice=0.68.ckpt")
+    model = dlv3.LitDeepLabV3.load_from_checkpoint(ckpt_path)
 
     # Load data (INPAINTED!)
     ds_sub = KelpNCDataset(img_nc_path="data_ncf/test_imgs_fe.nc", mask_nc_path=None)
@@ -69,4 +69,5 @@ if __name__ == "__main__":
     os.system(f"cd {submission_dir} && tar -czf {submission_name}_pred.tar.gz pred")
 
     # Backup model
-    shutil.copytree(ckpt_path.parent.parent, submission_dir / "model")
+    # shutil.copytree(ckpt_path.parent.parent, submission_dir / "model")
+    shutil.copy(ckpt_path, submission_dir / ckpt_path.name)

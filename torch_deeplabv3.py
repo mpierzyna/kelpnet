@@ -264,7 +264,7 @@ if __name__ == "__main__":
                          lr=5e-4, lr_gamma=0.75, weight_decay=1e-1)
     trainer = L.Trainer(
         # devices=1,
-        max_epochs=30,
+        max_epochs=20,
         log_every_n_steps=10,
         callbacks=[
             # EarlyStopping(monitor="val_dice", patience=3, mode="max"),
