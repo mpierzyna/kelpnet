@@ -9,6 +9,7 @@ import pandas as pd
 import pytorch_toolbelt.losses
 import rasterio
 import torch
+import torch.nn.functional as F
 import torch.utils.data
 import torchmetrics
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
@@ -44,8 +45,11 @@ def drop_channels(img, mask):
 
 
 class DeepLabV3(nn.Module):
-    def __init__(self, n_ch: int):
+    def __init__(self, n_ch: int, upsample_size: int):
         super().__init__()
+
+        self.n_ch = n_ch
+        self.upsample_size = upsample_size
 
         # Load a preconfigured DeepLabV3 with one output class
         self.model = deeplabv3_resnet50(num_classes=1)
@@ -54,20 +58,30 @@ class DeepLabV3(nn.Module):
         self.model.backbone.conv1 = nn.Conv2d(n_ch, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
 
     def forward(self, x):
-        # Forward pass through the modified DeepLabV3 model
-        output = self.model(x)["out"]
+        # Upscale x before backbone pass
+        input_shape = x.shape[-2:]
+        x = F.interpolate(x, size=(self.upsample_size, self.upsample_size), mode="bilinear", align_corners=False)
+
+        # Backbone pass
+        x = self.model.backbone(x)["out"]
+
+        # Classifier pass (DeepLabV3 head)
+        x = self.model.classifier(x)
+
+        # Interpolate to original size
+        x = F.interpolate(x, size=input_shape, mode="bilinear", align_corners=False)
 
         # remove channel dimension since we only have one channel
-        output = output.squeeze(1)
+        x = x.squeeze(1)
 
         # Apply sigmoid activation for binary classification
-        return torch.sigmoid(output)
+        return torch.sigmoid(x)
 
 
 class LitDeepLabV3(L.LightningModule):
-    def __init__(self, n_ch: int, ens_prediction: bool, lr: float, weight_decay: float, lr_gamma: float):
+    def __init__(self, n_ch: int, upsample_size: int, ens_prediction: bool, lr: float, weight_decay: float, lr_gamma: float):
         super().__init__()
-        self.model = DeepLabV3(n_ch=n_ch)
+        self.model = DeepLabV3(n_ch=n_ch, upsample_size=upsample_size)
         self.crit = pytorch_toolbelt.losses.DiceLoss(mode="binary", from_logits=False)
 
         # Additional metrics
@@ -75,8 +89,9 @@ class LitDeepLabV3(L.LightningModule):
 
         # Store arguments (should also be accessible via self.hparams)
         self.save_hyperparameters()
-        self.ens_prediction = ens_prediction
         self.n_ch = n_ch
+        self.upsample_size = upsample_size
+        self.ens_prediction = ens_prediction
         self.lr = lr
         self.lr_gamma = lr_gamma
         self.weight_decay = weight_decay
@@ -155,7 +170,7 @@ def apply_train_trafos(ds: KelpNCDataset) -> None:
         [
             A.HorizontalFlip(),
             A.VerticalFlip(),
-            A.RandomSizedCrop(min_max_height=(200, 350), height=350, width=350, w2h_ratio=1),
+            # A.RandomSizedCrop(min_max_height=(200, 350), height=350, width=350, w2h_ratio=1),
             # A.PixelDropout(dropout_prob=0.01, per_channel=True)
         ]
     )
@@ -245,7 +260,8 @@ if __name__ == "__main__":
     )
 
     # Train
-    model = LitDeepLabV3(n_ch=8, ens_prediction=True, lr=5e-4, lr_gamma=0.75, weight_decay=1e-1)
+    model = LitDeepLabV3(n_ch=8, ens_prediction=True, upsample_size=512,
+                         lr=5e-4, lr_gamma=0.75, weight_decay=1e-1)
     trainer = L.Trainer(
         # devices=1,
         max_epochs=30,
@@ -262,4 +278,5 @@ if __name__ == "__main__":
     )
 
     # New trainer on just one device
-    trainer.test(ckpt_path="best", dataloaders=test_loader)
+    trainer = L.Trainer(devices=1)
+    trainer.test(model, dataloaders=test_loader)

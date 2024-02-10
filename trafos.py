@@ -83,6 +83,13 @@ def downsample(img, mask):
     return img, mask
 
 
+def upsample_to_512(img, mask):
+    """OpenCV also requires channel to be last dimension (not needed if augmentations used)"""
+    img = cv2.resize(img, (512, 512))
+    mask = if_mask_valid(cv2.resize)(mask, (512, 512))
+    return img, mask
+
+
 aug_pipeline = A.Compose(
     [
         A.Rotate(
