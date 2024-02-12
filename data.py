@@ -1,6 +1,6 @@
 import enum
 import torch
-from typing import Optional
+from typing import Optional, List, Tuple
 import pathlib
 import numpy as np
 import rasterio
@@ -173,13 +173,7 @@ class KelpNCDataset(Dataset):
     def __len__(self):
         return len(self.imgs)
 
-    def __getitem__(self, idx):
-        img = self.imgs.isel(sample=idx)
-        if self.masks is None:
-            mask = None
-        else:
-            mask = self.masks.isel(sample=idx)
-
+    def _apply_trafos(self, idx, img, mask):
         for tf in self.transforms:
             logger.debug(f"Applying {tf.__name__} to {idx}")
             img, mask = tf(img, mask)
@@ -188,8 +182,55 @@ class KelpNCDataset(Dataset):
 
         return img, mask
 
+    def __getitem__(self, idx):
+        img = self.imgs.isel(sample=idx)
+        if self.masks is None:
+            mask = None
+        else:
+            mask = self.masks.isel(sample=idx)
+
+        img, mask = self._apply_trafos(idx, img, mask)
+        return img, mask
+
     def add_transform(self, tf):
         self.transforms.append(tf)
+
+
+class KelpTiledDataset(KelpNCDataset):
+    def __init__(self, img_nc_path: str, n_rand_tiles: int, tile_size: int, random_seed: int,
+                 mask_nc_path: Optional[str] = None, sample_mask: Optional[np.ndarray] = None):
+        # Execute parent code for loading
+        super().__init__(img_nc_path, mask_nc_path, sample_mask)
+        
+        # Store vars
+        self.n_rand_tiles = n_rand_tiles
+        self.tile_size = tile_size
+        self.random_seed = random_seed
+
+        # Generate random crops/tile indices
+        rng = np.random.default_rng(seed=random_seed)
+        n_imgs = len(self.imgs)
+        orig_size = self.imgs.sizes["i"]  # assume quadratic images
+        self.img_inds = np.repeat(np.arange(n_imgs), n_rand_tiles)  # Repeat indices for each image
+        self.img_tile_inds = rng.integers(0, orig_size - tile_size + 1, size=(n_imgs * n_rand_tiles, 2))  # Random tile indices
+
+    def __len__(self):
+        return len(self.img_inds)
+
+    def __getitem__(self, idx):
+        idx_img = self.img_inds[idx]
+        tile_i, tile_j = self.img_tile_inds[idx]
+
+        img = self.imgs.isel(sample=idx_img)
+        img = img.sel(i=slice(tile_i, tile_i + self.tile_size), j=slice(tile_j, tile_j + self.tile_size))
+        if self.masks is None:
+            mask = None
+        else:
+            mask = self.masks.isel(sample=idx_img)
+            mask = mask.sel(i=slice(tile_i, tile_i + self.tile_size), j=slice(tile_j, tile_j + self.tile_size))
+
+        img, mask = self._apply_trafos(idx, img, mask)
+        return img, mask
 
 
 def split_train_test_val(ds: KelpDataset, seed=42):

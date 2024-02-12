@@ -120,6 +120,10 @@ def to_tensor(img, mask):
     return torch.tensor(img, dtype=torch.float32), mask
 
 
+def to_binary_kelp(img, mask):
+    return img, np.sum(mask) > 0
+
+
 def add_fft2_ch(img, mask):
     nir_ft = compute_scaled_fft2(img[:, :, Ch.NIR.value]) / 20
     swir_ft = compute_scaled_fft2(img[:, :, Ch.SWIR.value]) / 20
