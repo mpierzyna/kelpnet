@@ -194,13 +194,21 @@ def apply_infer_trafos(ds: KelpNCDataset) -> None:
 
 
 def get_dataset(random_seed: int = 42):
-    # Init dataset but don't apply trafos
-    # ds = KelpDataset(img_dir="data_inpainted/train_satellite/", mask_dir="data/train_kelp/")
+    # Load dataset without outlier filter
     ds = KelpNCDataset(img_nc_path="data_ncf/train_imgs_fe.nc", mask_nc_path="data_ncf/train_masks.ncf")
+    all_tiles = ds.tile_ids
 
-    # Split into sub datasets and apply trafos
-    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds), random_seed=random_seed)
+    # Perform train/val/test split based on number of valid tiles only
+    is_outlier = pd.read_csv("is_outlier.csv")["0"]
+    valid_tiles = all_tiles[~is_outlier]
+    mask_train, mask_val, mask_test = get_train_val_test_masks(len(valid_tiles), random_seed=random_seed)
 
+    # Loading requires mask of full length of dataset, so we fuse train/val/test masks and outlier masks
+    mask_train = np.isin(all_tiles, valid_tiles[mask_train])
+    mask_val = np.isin(all_tiles, valid_tiles[mask_val])
+    mask_test = np.isin(all_tiles, valid_tiles[mask_test])
+
+    # Now perform loading on split and filtered dataset
     ds_train = KelpNCDataset(img_nc_path=ds.img_nc_path, mask_nc_path=ds.mask_nc_path, sample_mask=mask_train)
     apply_train_trafos(ds_train)
 
@@ -256,7 +264,7 @@ if __name__ == "__main__":
     # test_loaders()
 
     train_loader, val_loader, test_loader = get_loaders(
-        num_workers=8, batch_size=32, kf_weighing=True, random_seed=42
+        num_workers=8, batch_size=32, kf_weighing=False, random_seed=42
     )
 
     # Train
