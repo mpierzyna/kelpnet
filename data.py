@@ -289,3 +289,23 @@ def get_train_val_test_masks(n: int, random_seed: int = 42):
     mask_test = np.isin(inds, inds_test)
 
     return mask_train, mask_val, mask_test
+
+
+if __name__ == "__main__":
+    import tqdm
+    ds_kwargs = {
+        "img_nc_path": "data_ncf/train_imgs_fe.nc",
+        "mask_nc_path": "data_ncf/train_masks.ncf",
+        "n_rand_tiles": 25,
+        "tile_size": 64,
+        "random_seed": 42,
+    }
+    ds = KelpTiledDataset(**ds_kwargs)
+
+    # Compute total kelp count
+    kelp_cnt = 0
+    for _, mask in tqdm.tqdm(ds):
+        has_kelp = mask.sum() > 0
+        if has_kelp:
+            kelp_cnt += 1
+    print(kelp_cnt / len(ds))

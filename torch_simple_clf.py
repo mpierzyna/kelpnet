@@ -1,28 +1,31 @@
 from typing import List, Optional
 
 import albumentations as A
+import click
 import lightning as L
 import numpy as np
 import torch
 import torch.nn as nn
 from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
 from lion_pytorch import Lion
-from torchmetrics import Accuracy
 
 import trafos
-from data import KelpTiledDataset, get_train_val_test_masks
 from data import Channel as Ch
+from data import KelpTiledDataset, get_train_val_test_masks
 
 
 class BinaryClfCNN(nn.Module):
     def __init__(self, n_ch: int, fc_size: int, p_dropout: float):
+        res_in = 64
+        ch1, ch2 = 64, 128
+
         super(BinaryClfCNN, self).__init__()
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(in_channels=n_ch, out_channels=32, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=n_ch, out_channels=ch1, kernel_size=3, stride=1, padding=1),
             nn.Dropout2d(p=p_dropout),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=ch1, out_channels=ch2, kernel_size=3, stride=1, padding=1),
             nn.Dropout2d(p=p_dropout),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
@@ -30,7 +33,7 @@ class BinaryClfCNN(nn.Module):
 
         self.flatten = nn.Flatten()
         self.fc_layers = nn.Sequential(
-            nn.Linear(64 * 16 * 16, fc_size), nn.Dropout(p=p_dropout), nn.ReLU(), nn.Linear(fc_size, 1), nn.Sigmoid()
+            nn.Linear(ch2 * (res_in // 4) * (res_in // 4), fc_size), nn.Dropout(p=p_dropout), nn.ReLU(), nn.Linear(fc_size, 1), nn.Sigmoid()
         )
 
     def forward(self, x):
@@ -46,16 +49,14 @@ class LitBinaryClf(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.model = BinaryClfCNN(n_ch=n_ch, fc_size=fc_size, p_dropout=p_dropout)
-        self.accuracy = Accuracy(task="binary", threshold=0.5)
+        self.crit = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(8))  # ~13.3% of samples have kelp
 
     def _shared_eval_step(self, batch, batch_idx, prefix):
         x, y = batch
         y_hat = self.model(x)
 
-        loss = nn.BCEWithLogitsLoss()(y_hat, y.type_as(y_hat))
-        acc = self.accuracy(torch.round(y_hat), y)
+        loss = self.crit(y_hat, y.type_as(y_hat))
         self.log(f"{prefix}_loss", loss)
-        self.log(f"{prefix}_acc", acc, prog_bar=True)
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -150,46 +151,55 @@ def get_loaders(use_channels: Optional[List[int]], random_seed: int, **loader_kw
     return train_loader, val_loader, test_loader
 
 
-def train(i_member: int, i_device: int, n_ensemble: int = 25):
-    GLOBAL_SEED = 42  # DO NOT CHANGE
+GLOBAL_SEED = 42  # DO NOT CHANGE
 
-    N_USE_CHANNELS = 3
-    VALID_CHANNELS = [
-        Ch.SWIR,
-        Ch.NIR,
-        Ch.R,
-        Ch.G,
-        Ch.B,
-        Ch.NDWI_1,
-        Ch.NDWI_2,
-        Ch.NDVI,
-        Ch.GNDVI,
-        Ch.NDTI,
-        Ch.EVI,
-        Ch.CARI,
-    ]
+VALID_CHANNELS = [
+    Ch.SWIR,
+    Ch.NIR,
+    Ch.R,
+    Ch.G,
+    Ch.B,
+    Ch.NDWI_1,
+    Ch.NDWI_2,
+    Ch.NDVI,
+    Ch.GNDVI,
+    Ch.NDTI,
+    Ch.EVI,
+    Ch.CARI,
+]
 
+
+def train(*, n_ch: Optional[int],  i_member: int, i_device: int):
     # Init rng with global seed to get rng for this member
     rng = np.random.default_rng(GLOBAL_SEED)
-    random_seed = rng.integers(0, 2**32 - 1, size=n_ensemble)[i_member]
+    random_seed = None
+    for _ in range(i_member + 1):
+        random_seed = rng.integers(0, 2**32 - 1)
 
     # Now create new rng for this member
     rng = np.random.default_rng(random_seed)
     random_seed = rng.integers(0, 2**32 - 1)
 
     # Select channel subset
-    use_channels = rng.choice(VALID_CHANNELS, size=N_USE_CHANNELS, replace=False)
+    if n_ch is None:
+        # Default
+        use_channels = [0, 1, 2, 6, 8, 9, 10, 11]
+        n_ch = len(use_channels)
+    else:
+        # Random choice
+        use_channels = rng.choice(VALID_CHANNELS, size=n_ch, replace=False)
+
     print(f"Member {i_member} uses channels: {use_channels}.")
 
     train_loader, val_loader, test_loader = get_loaders(
-        use_channels=use_channels, num_workers=32, batch_size=128, random_seed=random_seed, prefetch_factor=10
+        use_channels=use_channels, num_workers=32, batch_size=1024, random_seed=random_seed, prefetch_factor=4
     )
 
     # Train
-    model = LitBinaryClf(n_ch=N_USE_CHANNELS)
+    model = LitBinaryClf(n_ch=n_ch)
     trainer = L.Trainer(
         devices=[i_device],
-        max_epochs=1,
+        max_epochs=15,
         log_every_n_steps=10,
         callbacks=[
             # EarlyStopping(monitor="val_dice", patience=3, mode="max"),
@@ -207,5 +217,12 @@ def train(i_member: int, i_device: int, n_ensemble: int = 25):
     trainer.test(model, dataloaders=test_loader)
 
 
+@click.command()
+@click.argument("i_member", type=int)
+@click.argument("i_device", type=int)
+def train_cli(i_member: int, i_device: int):
+    train(n_ch=None, i_member=i_member, i_device=i_device)
+
+
 if __name__ == "__main__":
-    train(1, 0)
+    train_cli()
