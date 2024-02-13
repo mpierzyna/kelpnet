@@ -6,6 +6,7 @@ import lightning as L
 import numpy as np
 import torch
 import torch.nn as nn
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
 from lion_pytorch import Lion
 
@@ -77,7 +78,7 @@ class LitBinaryClf(L.LightningModule):
         return Lion(self.parameters(), lr=1e-4)
 
 
-def get_dataset(use_channels: Optional[List[int]], random_seed: int):
+def get_dataset(use_channels: Optional[List[int]], mode: str, random_seed: int):
     def drop_channels(img, mask):
         """Only keep specified channels. Expecting channel as last dimension."""
         img = img[:, :, use_channels]
@@ -102,7 +103,10 @@ def get_dataset(use_channels: Optional[List[int]], random_seed: int):
         ds.add_transform(trafos.xr_to_np)
         ds.add_transform(apply_aug)  # Random augmentation only during training!
         ds.add_transform(trafos.channel_first)
-        ds.add_transform(trafos.to_binary_kelp)
+
+        if mode == "binary":
+            ds.add_transform(trafos.to_binary_kelp)
+
         ds.add_transform(trafos.to_tensor)
 
     def apply_infer_trafos(ds: KelpTiledDataset) -> None:
@@ -111,7 +115,10 @@ def get_dataset(use_channels: Optional[List[int]], random_seed: int):
 
         ds.add_transform(trafos.xr_to_np)
         ds.add_transform(trafos.channel_first)
-        ds.add_transform(trafos.to_binary_kelp)
+
+        if mode == "binary":
+            ds.add_transform(trafos.to_binary_kelp)
+
         ds.add_transform(trafos.to_tensor)
 
     ds_kwargs = {
@@ -138,8 +145,8 @@ def get_dataset(use_channels: Optional[List[int]], random_seed: int):
     return ds_train, ds_val, ds_test
 
 
-def get_loaders(use_channels: Optional[List[int]], random_seed: int, **loader_kwargs):
-    ds_train, ds_val, ds_test = get_dataset(use_channels=use_channels, random_seed=random_seed)
+def get_loaders(use_channels: Optional[List[int]], mode: str, random_seed: int, **loader_kwargs):
+    ds_train, ds_val, ds_test = get_dataset(use_channels=use_channels, mode=mode, random_seed=random_seed)
 
     # Shuffle data for training
     train_loader = torch.utils.data.DataLoader(ds_train, shuffle=True, **loader_kwargs)
@@ -188,11 +195,22 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int):
     else:
         # Random choice
         use_channels = rng.choice(VALID_CHANNELS, size=n_ch, replace=False)
+    use_channels = np.array(use_channels)
 
     print(f"Member {i_member} uses channels: {use_channels}.")
 
     train_loader, val_loader, test_loader = get_loaders(
-        use_channels=use_channels, num_workers=32, batch_size=1024, random_seed=random_seed, prefetch_factor=4
+        use_channels=use_channels, mode="binary",
+        num_workers=32, batch_size=1024, random_seed=random_seed, prefetch_factor=4
+    )
+
+    # Save best models
+    ckpt_callback = ModelCheckpoint(
+        save_top_k=1,
+        monitor="val_loss",
+        mode="min",
+        dirpath="ens_clf",
+        filename=f"clf_{i_member}_" + "-".join(use_channels.astype(str)) + "_{epoch:02d}_{val_dice:.2f}",
     )
 
     # Train
@@ -202,7 +220,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int):
         max_epochs=15,
         log_every_n_steps=10,
         callbacks=[
-            # EarlyStopping(monitor="val_dice", patience=3, mode="max"),
+            ckpt_callback,
             LearningRateMonitor(logging_interval="epoch"),
         ],
     )

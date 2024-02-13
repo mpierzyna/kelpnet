@@ -1,5 +1,9 @@
 from torch import nn
 import torch
+import lightning as L
+import torchmetrics
+import pytorch_toolbelt
+import lion_pytorch
 
 
 class ConvBlock(nn.Module):
@@ -53,7 +57,7 @@ class DecoderBlock(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, n_ch):
+    def __init__(self, n_ch: int):
         super().__init__()
 
         # Encoder
@@ -85,4 +89,36 @@ class UNet(nn.Module):
         outputs = outputs.squeeze(1)  # remove channel dimension since we only have one channel
         return outputs
 
- 
+
+class LitUNet(L.LightningModule):
+    def __init__(self, n_ch: int):
+        super().__init__()
+        self.save_hyperparameters()
+
+        self.model = UNet(n_ch=n_ch)
+        self.crit = pytorch_toolbelt.losses.DiceLoss(mode="binary", from_logits=False)
+        self.dice = torchmetrics.Dice()
+
+    def _shared_step(self, batch, batch_idx, prefix: str):
+        x, y = batch
+        y_hat = self.model(x)
+        loss = self.crit(y_hat, y)
+        self.log(f"{prefix}_loss", loss, sync_dist=True)
+        self.log(f"{prefix}_dice", self.dice(y_hat, y.int()), sync_dist=True)
+        return loss
+
+    def training_step(self, batch, batch_idx):
+        return self._shared_step(batch, batch_idx, "train")
+
+    def validation_step(self, batch, batch_idx):
+        return self._shared_step(batch, batch_idx, "val")
+
+    def test_step(self, batch, batch_idx):
+        return self._shared_step(batch, batch_idx, "test")
+
+    def configure_optimizers(self):
+        optimizer = lion_pytorch.Lion(self.parameters(), lr=1e-4, weight_decay=1e-1)
+        # lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.lr_gamma)
+        # lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+        # return [optimizer], [lr_scheduler]
+        return optimizer
