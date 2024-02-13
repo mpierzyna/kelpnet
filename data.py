@@ -232,6 +232,18 @@ class KelpTiledDataset(KelpNCDataset):
         img, mask = self._apply_trafos(idx, img, mask)
         return img, mask
 
+    @classmethod
+    def only_with_kelp(cls, **kwargs):
+        """Create a new KelpTiledDataset with only samples that contain kelp."""
+        # Load dataset
+        ds = cls(**kwargs)
+
+        # Get kelp mask
+        has_kelp = ds.masks.sum(["i", "j"]) > 0
+
+        # Create new dataset with only kelp samples
+        return cls(**kwargs, sample_mask=has_kelp)
+
 
 def split_train_test_val(ds: KelpDataset, seed=42):
     """Split data into train (70%), validation (15%) and test (15%) set."""
