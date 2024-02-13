@@ -11,13 +11,15 @@ import trafos
 
 
 class BinaryClfCNN(nn.Module):
-    def __init__(self, n_ch: int, fc_size: int):
+    def __init__(self, n_ch: int, fc_size: int, p_dropout: float):
         super(BinaryClfCNN, self).__init__()
         self.conv_layers = nn.Sequential(
             nn.Conv2d(in_channels=n_ch, out_channels=32, kernel_size=3, stride=1, padding=1),
+            nn.Dropout2d(p=p_dropout),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1),
+            nn.Dropout2d(p=p_dropout),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2)
         )
@@ -25,6 +27,7 @@ class BinaryClfCNN(nn.Module):
         self.flatten = nn.Flatten()
         self.fc_layers = nn.Sequential(
             nn.Linear(64 * 16 * 16, fc_size),
+            nn.Dropout(p=p_dropout),
             nn.ReLU(),
             nn.Linear(fc_size, 1),
             nn.Sigmoid()
@@ -34,24 +37,40 @@ class BinaryClfCNN(nn.Module):
         x = self.conv_layers(x)
         x = self.flatten(x)
         x = self.fc_layers(x)
+        x = x.squeeze(1)
         return x
 
 
 class LitBinaryClf(L.LightningModule):
-    def __init__(self, n_ch: int, fc_size=128):
+    def __init__(self, n_ch: int, fc_size=128, p_dropout=.2):
         super().__init__()
-        self.model = BinaryClfCNN(n_ch=n_ch, fc_size=fc_size)
+        self.save_hyperparameters()
+        self.model = BinaryClfCNN(n_ch=n_ch, fc_size=fc_size, p_dropout=p_dropout)
         self.accuracy = Accuracy(task="binary", threshold=0.5)
 
-    def training_step(self, batch, batch_idx):
+    def _shared_eval_step(self, batch, batch_idx, prefix):
         x, y = batch
         y_hat = self.model(x)
 
-        loss = nn.BCEWithLogitsLoss()(y_hat, y.unsqueeze(1).type_as(y_hat))
-        acc = self.accuracy(torch.round(y_hat), y.unsqueeze(1))
-        self.log('train_loss', loss)
-        self.log('train_acc', acc, prog_bar=True)
+        loss = nn.BCEWithLogitsLoss()(y_hat, y.type_as(y_hat))
+        acc = self.accuracy(torch.round(y_hat), y)
+        self.log(f"{prefix}_loss", loss)
+        self.log(f"{prefix}_acc", acc, prog_bar=True)
         return loss
+
+    def training_step(self, batch, batch_idx):
+        return self._shared_eval_step(batch, batch_idx, "train")
+
+    def validation_step(self, batch, batch_idx):
+        return self._shared_eval_step(batch, batch_idx, "val")
+
+    def test_step(self, batch, batch_idx):
+        return self._shared_eval_step(batch, batch_idx, "test")
+
+    def predict_step(self, batch, batch_idx):
+        x, _ = batch
+        y_hat = self.model(x)
+        return y_hat
 
     def configure_optimizers(self):
         return Lion(self.parameters(), lr=1e-4)
@@ -138,7 +157,7 @@ def get_loaders(random_seed: int = 42, **loader_kwargs):
 
 if __name__ == "__main__":
     train_loader, val_loader, test_loader = get_loaders(
-        num_workers=32, batch_size=1024, random_seed=42
+        num_workers=32, batch_size=128, random_seed=42, prefetch_factor=10
     )
 
     # Train
