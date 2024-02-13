@@ -75,7 +75,6 @@ class LitBinaryClf(L.LightningModule):
     def configure_optimizers(self):
         return Lion(self.parameters(), lr=1e-4)
 
-
 def drop_channels(img, mask):
     """Drop channels with low importance from img.
     Expects channels in last dimension.
