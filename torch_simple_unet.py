@@ -11,6 +11,7 @@ from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
 import pytorch_toolbelt.losses
 import torchmetrics
 import lion_pytorch
+import pathlib
 
 import trafos
 from data import Channel as Ch
@@ -224,6 +225,10 @@ def get_dataset(use_channels: Optional[List[int]], random_seed: int):
 def get_loaders(use_channels: Optional[List[int]], random_seed: int, **loader_kwargs):
     ds_train, ds_val, ds_test = get_dataset(use_channels=use_channels, random_seed=random_seed)
 
+    ds_train.load()
+    ds_val.load()
+    ds_test.load()
+
     # Shuffle data for training
     train_loader = torch.utils.data.DataLoader(ds_train, shuffle=True, **loader_kwargs)
 
@@ -234,7 +239,11 @@ def get_loaders(use_channels: Optional[List[int]], random_seed: int, **loader_kw
     return train_loader, val_loader, test_loader
 
 
-def train(*, n_ch: Optional[int],  i_member: int, i_device: int):
+def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
+    # Make sure ens_root exists and is empty
+    ens_root = pathlib.Path(ens_root)
+    ens_root.mkdir(exist_ok=True)
+
     # Init rng with global seed to get rng for this member
     rng = np.random.default_rng(GLOBAL_SEED)
     random_seed = None
@@ -258,7 +267,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int):
     print(f"Member {i_member} uses channels: {use_channels}.")
 
     train_loader, val_loader, test_loader = get_loaders(
-        use_channels=use_channels, num_workers=32, batch_size=1024, random_seed=random_seed, prefetch_factor=4
+        use_channels=use_channels, num_workers=0, batch_size=1024, random_seed=random_seed, pin_memory=True
     )
 
     # Save best models
@@ -266,7 +275,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int):
         save_top_k=1,
         monitor="val_dice",
         mode="max",
-        dirpath="ens_seg",
+        dirpath=ens_root,
         filename=f"seg_{i_member}_" + "-".join(use_channels.astype(str)) + "_{epoch:02d}_{val_dice:.2f}",
     )
 
@@ -274,7 +283,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int):
     model = LitUNet(n_ch=n_ch)
     trainer = L.Trainer(
         devices=[i_device],
-        max_epochs=20,
+        max_epochs=15,
         log_every_n_steps=10,
         callbacks=[
             ckpt_callback,
@@ -293,10 +302,11 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int):
 
 
 @click.command()
+@click.option("--ens_root", type=str, default="ens_seg/dev")
 @click.argument("i_member", type=int)
 @click.argument("i_device", type=int)
-def train_cli(i_member: int, i_device: int):
-    train(n_ch=None, i_member=i_member, i_device=i_device)
+def train_cli(ens_root: str, i_member: int, i_device: int):
+    train(n_ch=3, i_member=i_member, i_device=i_device, ens_root=ens_root)
 
 
 if __name__ == "__main__":

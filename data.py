@@ -170,6 +170,8 @@ class KelpNCDataset(Dataset):
         # Store trafos
         self.transforms = []
 
+        self.loaded = False
+
     def __len__(self):
         return len(self.imgs)
 
@@ -194,6 +196,15 @@ class KelpNCDataset(Dataset):
 
     def add_transform(self, tf):
         self.transforms.append(tf)
+
+    def load(self):
+        """Load all data into memory."""
+        if not self.loaded:
+            print("Loading data into memory...")
+            self.imgs.load()
+            if self.masks is not None:
+                self.masks.load()
+            self.loaded = True
 
 
 class KelpTiledDataset(KelpNCDataset):
@@ -301,6 +312,7 @@ if __name__ == "__main__":
         "random_seed": 42,
     }
     ds = KelpTiledDataset(**ds_kwargs)
+    ds.load()
 
     # Compute total kelp count
     kelp_cnt = 0
