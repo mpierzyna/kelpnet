@@ -16,26 +16,10 @@ import pathlib
 import trafos
 from data import Channel as Ch
 from data import KelpTiledDataset, get_train_val_test_masks
+import shared
 
 torch.set_float32_matmul_precision("high")
 
-
-GLOBAL_SEED = 42  # DO NOT CHANGE
-
-VALID_CHANNELS = [
-    Ch.SWIR,
-    Ch.NIR,
-    Ch.R,
-    Ch.G,
-    Ch.B,
-    Ch.NDWI_1,
-    Ch.NDWI_2,
-    Ch.NDVI,
-    Ch.GNDVI,
-    Ch.NDTI,
-    Ch.EVI,
-    Ch.CARI,
-]
 
 
 class ConvBlock(nn.Module):
@@ -194,19 +178,24 @@ def apply_infer_trafos(ds: KelpTiledDataset) -> None:
     ds.add_transform(trafos.to_tensor)
 
 
-def get_dataset(use_channels: Optional[List[int]], random_seed: int):
+def get_dataset(use_channels: Optional[List[int]], split_seed: int, tile_seed: int):
+    """Get dataset with channel subset and split into train/val/test.
+    Two seeds are used in an ensemble case:
+    - `split_seed` should be the same for all members to get reproducible (independent) train/val/test splits.
+    - `tile_seed` should be different for each member to get different random tiles for each member.
+    """
     ds_kwargs = {
         "img_nc_path": "data_ncf/train_imgs_fe.nc",
         "mask_nc_path": "data_ncf/train_masks.ncf",
         "n_rand_tiles": 25,
         "tile_size": 64,
-        "random_seed": random_seed,
+        "random_seed": tile_seed,
         "use_channels": use_channels,
     }
     ds = KelpTiledDataset(**ds_kwargs)
 
     # Split data into train/val/test
-    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds.imgs), random_seed=random_seed)
+    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds.imgs), random_seed=split_seed)
 
     # Load dataset without outlier filter
     ds_train = KelpTiledDataset(**ds_kwargs, sample_mask=mask_train)
@@ -220,9 +209,10 @@ def get_dataset(use_channels: Optional[List[int]], random_seed: int):
     return ds_train, ds_val, ds_test
 
 
-def get_loaders(use_channels: Optional[List[int]], random_seed: int, **loader_kwargs):
-    ds_train, ds_val, ds_test = get_dataset(use_channels=use_channels, random_seed=random_seed)
+def get_loaders(use_channels: Optional[List[int]], split_seed: int, tile_seed: int, **loader_kwargs):
+    ds_train, ds_val, ds_test = get_dataset(use_channels=use_channels, split_seed=split_seed, tile_seed=tile_seed)
 
+    # Load data to RAM for fast training
     ds_train.load()
     ds_val.load()
     ds_test.load()
@@ -242,30 +232,16 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
     ens_root = pathlib.Path(ens_root)
     ens_root.mkdir(exist_ok=True)
 
-    # Init rng with global seed to get rng for this member
-    rng = np.random.default_rng(GLOBAL_SEED)
-    random_seed = None
-    for _ in range(i_member + 1):
-        random_seed = rng.integers(0, 2**32 - 1)
-
-    # Now create new rng for this member
-    rng = np.random.default_rng(random_seed)
-    random_seed = rng.integers(0, 2**32 - 1)
+    # Get random seed for this member
+    random_seed = shared.get_local_seed(i_member)
 
     # Select channel subset
-    if n_ch is None:
-        # Default
-        use_channels = [0, 1, 2, 6, 8, 9, 10, 11]
-        n_ch = len(use_channels)
-    else:
-        # Random choice
-        use_channels = rng.choice(VALID_CHANNELS, size=n_ch, replace=False)
-    use_channels = np.array(use_channels)
-
+    use_channels, n_ch = shared.get_channel_subset(n_ch, random_seed)
     print(f"Member {i_member} uses channels: {use_channels}.")
 
     train_loader, val_loader, test_loader = get_loaders(
-        use_channels=use_channels, num_workers=0, batch_size=1024, random_seed=random_seed, pin_memory=True
+        use_channels=use_channels, split_seed=shared.GLOBAL_SEED, tile_seed=random_seed,
+        num_workers=0, batch_size=1024, pin_memory=True
     )
 
     # Save best models
