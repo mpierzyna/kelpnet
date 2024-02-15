@@ -17,6 +17,8 @@ import trafos
 from data import Channel as Ch
 from data import KelpTiledDataset, get_train_val_test_masks
 
+torch.set_float32_matmul_precision("high")
+
 
 GLOBAL_SEED = 42  # DO NOT CHANGE
 
@@ -94,13 +96,13 @@ class UNet(nn.Module):
         self.e1 = EncoderBlock(n_ch, 64)
         self.e2 = EncoderBlock(64, 128)
         self.e3 = EncoderBlock(128, 256)
-        self.e4 = EncoderBlock(256, 512)
+        # self.e4 = EncoderBlock(256, 512)
 
         # Bottleneck
-        self.b = ConvBlock(512, 1024)
+        self.b = ConvBlock(256, 512)
 
         # Decoder
-        self.d1 = DecoderBlock(1024, 512)
+        # self.d1 = DecoderBlock(1024, 512)
         self.d2 = DecoderBlock(512, 256)
         self.d3 = DecoderBlock(256, 128)
         self.d4 = DecoderBlock(128, 64)
@@ -114,13 +116,13 @@ class UNet(nn.Module):
         s1, p = self.e1(inputs)
         s2, p = self.e2(p)
         s3, p = self.e3(p)
-        s4, p = self.e4(p)
+        # s4, p = self.e4(p)
 
         # Bottleneck
-        b = self.b(p)
+        d = self.b(p)
 
         # Decoder
-        d = self.d1(b, s4)
+        # d = self.d1(b, s4)
         d = self.d2(d, s3)
         d = self.d3(d, s2)
         d = self.d4(d, s1)
@@ -133,6 +135,7 @@ class UNet(nn.Module):
 
 class LitUNet(L.LightningModule):
     def __init__(self, n_ch: int):
+        """todo: change to take list of channels as input"""
         super().__init__()
         self.save_hyperparameters()
 
@@ -157,53 +160,48 @@ class LitUNet(L.LightningModule):
     def test_step(self, batch, batch_idx):
         return self._shared_step(batch, batch_idx, "test")
 
+    def predict_step(self, batch, batch_idx):
+        x, _ = batch
+        return self.model(x)
+
     def configure_optimizers(self):
         optimizer = lion_pytorch.Lion(self.parameters(), lr=1e-4, weight_decay=1e-1)
         lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=.95)
         return [optimizer], [lr_scheduler]
 
 
+def apply_train_trafos(ds: KelpTiledDataset) -> None:
+    aug_pipeline = A.Compose(
+        [
+            A.HorizontalFlip(),
+            A.VerticalFlip(),
+        ]
+    )
+
+    def apply_aug(img, mask):
+        res = aug_pipeline(image=img, mask=mask)
+        return res["image"], res["mask"]
+
+    ds.add_transform(trafos.xr_to_np)
+    ds.add_transform(apply_aug)  # Random augmentation only during training!
+    ds.add_transform(trafos.channel_first)
+    ds.add_transform(trafos.to_tensor)
+
+
+def apply_infer_trafos(ds: KelpTiledDataset) -> None:
+    ds.add_transform(trafos.xr_to_np)
+    ds.add_transform(trafos.channel_first)
+    ds.add_transform(trafos.to_tensor)
+
+
 def get_dataset(use_channels: Optional[List[int]], random_seed: int):
-    def drop_channels(img, mask):
-        """Only keep specified channels. Expecting channel as last dimension."""
-        img = img[:, :, use_channels]
-        return img, mask
-
-    def apply_train_trafos(ds: KelpTiledDataset) -> None:
-        aug_pipeline = A.Compose(
-            [
-                A.HorizontalFlip(),
-                A.VerticalFlip(),
-            ]
-        )
-
-        def apply_aug(img, mask):
-            res = aug_pipeline(image=img, mask=mask)
-            return res["image"], res["mask"]
-
-        # Drop channels if requested
-        if use_channels is not None:
-            ds.add_transform(drop_channels)
-
-        ds.add_transform(trafos.xr_to_np)
-        ds.add_transform(apply_aug)  # Random augmentation only during training!
-        ds.add_transform(trafos.channel_first)
-        ds.add_transform(trafos.to_tensor)
-
-    def apply_infer_trafos(ds: KelpTiledDataset) -> None:
-        if use_channels is not None:
-            ds.add_transform(drop_channels)
-
-        ds.add_transform(trafos.xr_to_np)
-        ds.add_transform(trafos.channel_first)
-        ds.add_transform(trafos.to_tensor)
-
     ds_kwargs = {
         "img_nc_path": "data_ncf/train_imgs_fe.nc",
         "mask_nc_path": "data_ncf/train_masks.ncf",
         "n_rand_tiles": 25,
         "tile_size": 64,
         "random_seed": random_seed,
+        "use_channels": use_channels,
     }
     ds = KelpTiledDataset(**ds_kwargs)
 
@@ -283,7 +281,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
     model = LitUNet(n_ch=n_ch)
     trainer = L.Trainer(
         devices=[i_device],
-        max_epochs=15,
+        max_epochs=30,
         log_every_n_steps=10,
         callbacks=[
             ckpt_callback,

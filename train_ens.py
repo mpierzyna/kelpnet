@@ -1,8 +1,6 @@
-from typing import List
 import concurrent.futures
 import threading
 import subprocess
-from concurrent.futures import Future, ThreadPoolExecutor
 import pathlib
 import datetime
 import numpy as np
@@ -49,4 +47,4 @@ def train_ensemble(n_members: int, n_gpus: int) -> None:
 
 
 if __name__ == "__main__":
-    train_ensemble(n_members=25, n_gpus=3)
+    train_ensemble(n_members=10, n_gpus=2)

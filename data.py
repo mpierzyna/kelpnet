@@ -145,7 +145,7 @@ class MultiTaskKelpDataset(KelpDataset):
 
 
 class KelpNCDataset(Dataset):
-    def __init__(self, img_nc_path: str, mask_nc_path: Optional[str] = None, sample_mask: Optional[np.ndarray] = None):
+    def __init__(self, img_nc_path: str, mask_nc_path: Optional[str] = None, sample_mask: Optional[np.ndarray] = None, use_channels: Optional[List[int]] = None):
         # Open netcdf datasets where one sample with all channels is one chunk
         chunks = {"sample": 1, "i": None, "j": None, "ch": None}
 
@@ -166,6 +166,7 @@ class KelpNCDataset(Dataset):
         self.img_nc_path = img_nc_path
         self.mask_nc_path = mask_nc_path
         self.sample_mask = sample_mask
+        self.use_channels = use_channels
 
         # Store trafos
         self.transforms = []
@@ -186,6 +187,9 @@ class KelpNCDataset(Dataset):
 
     def __getitem__(self, idx):
         img = self.imgs.isel(sample=idx)
+        if self.use_channels is not None:
+            img = img.isel(ch=self.use_channels)
+
         if self.masks is None:
             mask = None
         else:
@@ -209,10 +213,11 @@ class KelpNCDataset(Dataset):
 
 class KelpTiledDataset(KelpNCDataset):
     def __init__(self, img_nc_path: str, n_rand_tiles: int, tile_size: int, random_seed: int,
-                 mask_nc_path: Optional[str] = None, sample_mask: Optional[np.ndarray] = None):
+                 mask_nc_path: Optional[str] = None, sample_mask: Optional[np.ndarray] = None,
+                 use_channels: Optional[List[int]] = None):
         # Execute parent code for loading
-        super().__init__(img_nc_path, mask_nc_path, sample_mask)
-        
+        super().__init__(img_nc_path, mask_nc_path, sample_mask, use_channels=use_channels)
+
         # Store vars
         self.n_rand_tiles = n_rand_tiles
         self.tile_size = tile_size
@@ -234,6 +239,9 @@ class KelpTiledDataset(KelpNCDataset):
 
         img = self.imgs.isel(sample=idx_img)
         img = img.sel(i=slice(tile_i, tile_i + self.tile_size), j=slice(tile_j, tile_j + self.tile_size))
+        if self.use_channels is not None:
+            img = img.isel(ch=self.use_channels)
+
         if self.masks is None:
             mask = None
         else:
