@@ -1,22 +1,16 @@
-from typing import List, Optional
+import pathlib
+from typing import Optional
 
-import albumentations as A
 import click
 import lightning as L
-import numpy as np
+import lion_pytorch
 import torch
 import torch.nn as nn
+import torchmetrics
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
-from lion_pytorch import Lion
-import pytorch_toolbelt.losses
-import pathlib
-import torchmetrics
 
-import trafos
 import shared
-from data import Channel as Ch
-from data import KelpTiledDataset, get_train_val_test_masks
 
 
 class BinaryClfCNN(nn.Module):
@@ -88,90 +82,9 @@ class LitBinaryClf(L.LightningModule):
         return y_hat
 
     def configure_optimizers(self):
-        return Lion(self.parameters(), lr=1e-4)
-
-
-def apply_train_trafos(ds: KelpTiledDataset, mode: str) -> None:
-    aug_pipeline = A.Compose(
-        [
-            A.HorizontalFlip(),
-            A.VerticalFlip(),
-        ]
-    )
-
-    def apply_aug(img, mask):
-        if mode == "binary":
-            res = aug_pipeline(image=img)
-            return res["image"], mask
-        else:
-            res = aug_pipeline(image=img, mask=mask)
-            return res["image"], res["mask"]
-
-    if mode == "binary":
-        ds.add_transform(trafos.to_binary_kelp)
-
-    ds.add_transform(trafos.xr_to_np)
-    ds.add_transform(apply_aug)  # Random augmentation only during training!
-    ds.add_transform(trafos.channel_first)
-    ds.add_transform(trafos.to_tensor)
-
-
-def apply_infer_trafos(ds: KelpTiledDataset, mode: str) -> None:
-    if mode == "binary":
-        ds.add_transform(trafos.to_binary_kelp)
-
-    ds.add_transform(trafos.xr_to_np)
-    ds.add_transform(trafos.channel_first)
-    ds.add_transform(trafos.to_tensor)
-
-
-def get_dataset(use_channels: Optional[List[int]], split_seed: int, tile_seed: int, mode: str):
-    """Get dataset with channel subset and split into train/val/test.
-    Two seeds are used in an ensemble case:
-    - `split_seed` should be the same for all members to get reproducible (independent) train/val/test splits.
-    - `tile_seed` should be different for each member to get different random tiles for each member.
-    """
-    ds_kwargs = {
-        "img_nc_path": "data_ncf/train_imgs_fe.nc",
-        "mask_nc_path": "data_ncf/train_masks.ncf",
-        "n_rand_tiles": 25,
-        "tile_size": 64,
-        "random_seed": tile_seed,
-        "use_channels": use_channels,
-    }
-    ds = KelpTiledDataset(**ds_kwargs)
-
-    # Split data into train/val/test
-    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds.imgs), random_seed=split_seed)
-
-    # Load dataset without outlier filter
-    ds_train = KelpTiledDataset(**ds_kwargs, sample_mask=mask_train)
-    apply_train_trafos(ds_train, mode=mode)
-
-    ds_val = KelpTiledDataset(**ds_kwargs, sample_mask=mask_val)
-    ds_test = KelpTiledDataset(**ds_kwargs, sample_mask=mask_test)
-    apply_infer_trafos(ds_val, mode=mode)
-    apply_infer_trafos(ds_test, mode=mode)
-
-    return ds_train, ds_val, ds_test
-
-
-def get_loaders(use_channels: Optional[List[int]], split_seed: int, tile_seed: int, mode: str, **loader_kwargs):
-    ds_train, ds_val, ds_test = get_dataset(use_channels=use_channels, split_seed=split_seed, tile_seed=tile_seed, mode=mode)
-
-    # Load data to RAM for fast training
-    ds_train.load()
-    ds_val.load()
-    ds_test.load()
-
-    # Shuffle data for training
-    train_loader = torch.utils.data.DataLoader(ds_train, shuffle=True, **loader_kwargs)
-
-    # Normal sampling for val and test
-    val_loader = torch.utils.data.DataLoader(ds_val, **loader_kwargs)
-    test_loader = torch.utils.data.DataLoader(ds_test, **loader_kwargs)
-
-    return train_loader, val_loader, test_loader
+        optimizer = lion_pytorch.Lion(self.parameters(), lr=5e-4, weight_decay=1e-1)
+        lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=.88)
+        return optimizer, lr_scheduler
 
 
 def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
@@ -186,7 +99,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
     use_channels, n_ch = shared.get_channel_subset(n_ch, random_seed)
     print(f"Member {i_member} uses channels: {use_channels}.")
 
-    train_loader, val_loader, test_loader = get_loaders(
+    train_loader, val_loader, test_loader = shared.get_loaders(
         use_channels=use_channels, split_seed=shared.GLOBAL_SEED, tile_seed=random_seed, mode="binary",
         num_workers=0, batch_size=1024, pin_memory=True
     )
