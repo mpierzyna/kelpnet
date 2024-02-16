@@ -16,7 +16,7 @@ import shared
 class BinaryClfCNN(nn.Module):
     def __init__(self, n_ch: int, fc_size: int, p_dropout: float):
         res_in = 64
-        ch1, ch2 = 64, 128
+        ch1, ch2, ch3 = 64, 128, 256
 
         super(BinaryClfCNN, self).__init__()
         self.conv_layers = nn.Sequential(
@@ -28,11 +28,15 @@ class BinaryClfCNN(nn.Module):
             nn.Dropout2d(p=p_dropout),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(in_channels=ch2, out_channels=ch3, kernel_size=3, stride=1, padding=1),
+            nn.Dropout2d(p=p_dropout),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
         )
 
         self.flatten = nn.Flatten()
         self.fc_layers = nn.Sequential(
-            nn.Linear(ch2 * (res_in // 4) * (res_in // 4), fc_size),
+            nn.Linear(ch3 * (res_in // 8) * (res_in // 8), fc_size),
             nn.Dropout(p=p_dropout),
             nn.ReLU(),
             nn.Linear(fc_size, 1),
@@ -84,7 +88,7 @@ class LitBinaryClf(L.LightningModule):
     def configure_optimizers(self):
         optimizer = lion_pytorch.Lion(self.parameters(), lr=5e-4, weight_decay=1e-1)
         lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=.88)
-        return optimizer, lr_scheduler
+        return [optimizer], [lr_scheduler]
 
 
 def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
@@ -117,7 +121,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
     model = LitBinaryClf(n_ch=n_ch)
     trainer = L.Trainer(
         devices=[i_device],
-        max_epochs=30,
+        max_epochs=15,
         log_every_n_steps=10,
         callbacks=[
             ckpt_callback,

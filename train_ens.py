@@ -4,24 +4,29 @@ import subprocess
 import pathlib
 import datetime
 import numpy as np
+import click
 
 ENS_ROOT = pathlib.Path("ens_seg") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 LOG_ROOT = ENS_ROOT / "logs"
 LOG_ROOT.mkdir(parents=True, exist_ok=True)
 
 
-def run(id_task: int, id_gpu: int) -> None:
+def run(script: str, id_task: int, id_gpu: int) -> None:
     log_file_path = LOG_ROOT / f"task_{id_task}_log.txt"
     print(f"Starting task {id_task} on GPU {id_gpu}, logging to {log_file_path}.")
 
     with open(log_file_path, "w") as log_file:
-        command = ["python", "torch_simple_unet.py", "--ens_root", str(ENS_ROOT), str(id_task), str(id_gpu)]
+        command = ["python", script, "--ens_root", str(ENS_ROOT), str(id_task), str(id_gpu)]
         p = subprocess.run(command, text=True, check=True, stdout=log_file, stderr=log_file)
 
     print(f"Task {id_task} on GPU {id_gpu} finished with return code {p.returncode}.")
 
 
-def train_ensemble(n_members: int, n_gpus: int) -> None:
+@click.command()
+@click.argument("script", type=str)
+@click.argument("n_members", type=int)
+@click.argument("n_gpus", type=int)
+def train_ensemble(script: str, n_members: int, n_gpus: int) -> None:
     gpu_in_use: np.ndarray = np.zeros(n_gpus, dtype=bool)
     lock: threading.Lock = threading.Lock()
 
@@ -32,7 +37,7 @@ def train_ensemble(n_members: int, n_gpus: int) -> None:
             gpu_in_use[gpu_id] = True
 
         # Run task
-        run(id_task, gpu_id)
+        run(script, id_task, gpu_id)
 
         # Release GPU
         with lock:
@@ -47,4 +52,5 @@ def train_ensemble(n_members: int, n_gpus: int) -> None:
 
 
 if __name__ == "__main__":
-    train_ensemble(n_members=10, n_gpus=2)
+    # train_ensemble(n_members=10, n_gpus=2)
+    train_ensemble()

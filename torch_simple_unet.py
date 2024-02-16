@@ -178,7 +178,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
     model = LitUNet(n_ch=n_ch)
     trainer = L.Trainer(
         devices=[i_device],
-        max_epochs=30,
+        max_epochs=15,
         log_every_n_steps=10,
         callbacks=[
             ckpt_callback,
