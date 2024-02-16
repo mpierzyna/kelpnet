@@ -91,10 +91,10 @@ class LitBinaryClf(L.LightningModule):
         return [optimizer], [lr_scheduler]
 
 
-def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
+def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_dir: str):
     # Make sure ens_root exists and is empty
-    ens_root = pathlib.Path(ens_root)
-    ens_root.mkdir(exist_ok=True, parents=True)
+    ens_dir = pathlib.Path(ens_dir)
+    ens_dir.mkdir(exist_ok=True, parents=True)
 
     # Get random seed for this member
     random_seed = shared.get_local_seed(i_member)
@@ -113,7 +113,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
         save_top_k=1,
         monitor="val_dice",
         mode="max",
-        dirpath=ens_root,
+        dirpath=ens_dir,
         filename=f"clf_{i_member}_" + "-".join(use_channels.astype(str)) + "_{epoch:02d}_{val_dice:.2f}",
     )
 
@@ -140,13 +140,14 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
 
 
 @click.command()
-@click.option("--ens_root", type=str, default="ens_clf/dev")
+@click.option("--ens_dir", type=str, default="ens_clf/dev")
 @click.argument("i_member", type=int)
 @click.argument("i_device", type=int)
-def train_cli(ens_root: str, i_member: int, i_device: int):
-    train(n_ch=3, i_member=i_member, i_device=i_device, ens_root=ens_root)
+def train_cli(ens_dir: str, i_member: int, i_device: int):
+    train(n_ch=3, i_member=i_member, i_device=i_device, ens_dir=ens_dir)
 
 
 if __name__ == "__main__":
-    train(n_ch=3, i_member=0, i_device=0, ens_root="ens_clf/dev")
+    train_cli()
+    # train(n_ch=3, i_member=0, i_device=0, ens_root="ens_clf/dev")
     # train_cli([0, 0])
