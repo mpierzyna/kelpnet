@@ -83,6 +83,7 @@ class LitBinaryClf(L.LightningModule):
     def predict_step(self, batch, batch_idx):
         x, _ = batch
         y_hat = self.model(x)
+        y_hat = torch.sigmoid(y_hat)
         return y_hat
 
     def configure_optimizers(self):
@@ -135,7 +136,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_dir: str):
     )
 
     # New trainer on just one device
-    trainer = L.Trainer(devices=[i_device], logger=None)
+    trainer = L.Trainer(devices=[i_device], logger=False)
     trainer.test(model, dataloaders=test_loader)
 
 

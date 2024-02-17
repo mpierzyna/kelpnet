@@ -148,10 +148,10 @@ class LitUNet(L.LightningModule):
         return [optimizer], [lr_scheduler]
 
 
-def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
+def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_dir: str):
     # Make sure ens_root exists and is empty
-    ens_root = pathlib.Path(ens_root)
-    ens_root.mkdir(exist_ok=True)
+    ens_dir = pathlib.Path(ens_dir)
+    ens_dir.mkdir(exist_ok=True)
 
     # Get random seed for this member
     random_seed = shared.get_local_seed(i_member)
@@ -170,7 +170,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
         save_top_k=1,
         monitor="val_dice",
         mode="max",
-        dirpath=ens_root,
+        dirpath=ens_dir,
         filename=f"seg_{i_member}_" + "-".join(use_channels.astype(str)) + "_{epoch:02d}_{val_dice:.2f}",
     )
 
@@ -192,16 +192,16 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_root: str):
     )
 
     # New trainer on just one device
-    trainer = L.Trainer(devices=[i_device], logger=None)
+    trainer = L.Trainer(devices=[i_device], logger=False)
     trainer.test(model, dataloaders=test_loader)
 
 
 @click.command()
-@click.option("--ens_root", type=str, default="ens_seg/dev")
+@click.option("--ens_dir", type=str, default="ens_seg/dev")
 @click.argument("i_member", type=int)
 @click.argument("i_device", type=int)
-def train_cli(ens_root: str, i_member: int, i_device: int):
-    train(n_ch=3, i_member=i_member, i_device=i_device, ens_root=ens_root)
+def train_cli(ens_dir: str, i_member: int, i_device: int):
+    train(n_ch=3, i_member=i_member, i_device=i_device, ens_dir=ens_dir)
 
 
 if __name__ == "__main__":
