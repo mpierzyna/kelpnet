@@ -6,7 +6,7 @@ import torch
 
 import trafos
 from data import Channel as Ch
-from data import KelpTiledDataset, get_train_val_test_masks, RandomTileSampler
+from data import KelpTiledDataset, get_train_val_test_masks, RandomTileSampler, KelpNCDataset
 
 torch.set_float32_matmul_precision("high")
 
@@ -112,6 +112,29 @@ def get_dataset(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
 
     ds_val = KelpTiledDataset(**ds_kwargs, sample_mask=mask_val)
     ds_test = KelpTiledDataset(**ds_kwargs, sample_mask=mask_test)
+    apply_infer_trafos(ds_val, mode=mode)
+    apply_infer_trafos(ds_test, mode=mode)
+
+    return ds_train, ds_val, ds_test
+
+
+def get_untiled_dataset(use_channels: Optional[List[int]], split_seed: int, mode: str):
+    ds_kwargs = {
+        "img_nc_path": "data_ncf/train_imgs_fe.nc",
+        "mask_nc_path": "data_ncf/train_masks.ncf",
+        "use_channels": use_channels,
+    }
+    ds = KelpNCDataset(**ds_kwargs)
+
+    # Split data into train/val/test
+    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds.imgs), random_seed=split_seed)
+
+    # Load dataset without outlier filter
+    ds_train = KelpNCDataset(**ds_kwargs, sample_mask=mask_train)
+    apply_train_trafos(ds_train, mode=mode)
+
+    ds_val = KelpNCDataset(**ds_kwargs, sample_mask=mask_val)
+    ds_test = KelpNCDataset(**ds_kwargs, sample_mask=mask_test)
     apply_infer_trafos(ds_val, mode=mode)
     apply_infer_trafos(ds_test, mode=mode)
 
