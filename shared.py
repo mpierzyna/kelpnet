@@ -6,7 +6,7 @@ import torch
 
 import trafos
 from data import Channel as Ch
-from data import KelpTiledDataset, get_train_val_test_masks
+from data import KelpTiledDataset, get_train_val_test_masks, RandomTileSampler
 
 torch.set_float32_matmul_precision("high")
 
@@ -94,12 +94,11 @@ def get_dataset(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
     - `split_seed` should be the same for all members to get reproducible (independent) train/val/test splits.
     - `tile_seed` should be different for each member to get different random tiles for each member.
     """
+    tile_sampler = RandomTileSampler(n_tiles=25, tile_size=64, random_seed=tile_seed)
     ds_kwargs = {
         "img_nc_path": "data_ncf/train_imgs_fe.nc",
         "mask_nc_path": "data_ncf/train_masks.ncf",
-        "n_rand_tiles": 25,
-        "tile_size": 64,
-        "random_seed": tile_seed,
+        "tile_sampler": tile_sampler,
         "use_channels": use_channels,
     }
     ds = KelpTiledDataset(**ds_kwargs)

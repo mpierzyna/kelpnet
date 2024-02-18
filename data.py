@@ -1,6 +1,7 @@
 import enum
 import torch
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Self
+import abc
 import pathlib
 import numpy as np
 import rasterio
@@ -211,24 +212,46 @@ class KelpNCDataset(Dataset):
             self.loaded = True
 
 
+class BaseTileSampler(abc.ABC):
+    def __init__(self, n_tiles: int, tile_size: int):
+        self.n_tiles = n_tiles
+        self.tile_size = tile_size
+
+    def fit(self, imgs: xr.Dataset) -> Self:
+        self.n_imgs_ = len(imgs)
+        self.orig_size_ = imgs.sizes["i"]  # assume quadratic images
+
+    def get_img_inds(self) -> np.ndarray:
+        """Repeat index of each image n_tiles times for each tile."""
+        return np.repeat(np.arange(self.n_imgs_), self.n_tiles)
+
+    @abc.abstractmethod
+    def get_img_tile_inds(self):
+        """Return list of indices for tiles to sample from each image."""
+
+
+class RandomTileSampler(BaseTileSampler):
+    def __init__(self, n_tiles: int, tile_size: int, random_seed: int):
+        super().__init__(n_tiles, tile_size)
+        self.random_seed = random_seed
+
+    def get_img_tile_inds(self):
+        """Get `n_tiles` random tile indices per image based on `tile_size` and `orig_size_` of images"""
+        rng = np.random.default_rng(seed=self.random_seed)
+        return rng.integers(0, self.orig_size_ - self.tile_size + 1, size=(self.n_imgs_ * self.n_tiles, 2))
+
+
 class KelpTiledDataset(KelpNCDataset):
-    def __init__(self, img_nc_path: str, n_rand_tiles: int, tile_size: int, random_seed: int,
-                 mask_nc_path: Optional[str] = None, sample_mask: Optional[np.ndarray] = None,
-                 use_channels: Optional[List[int]] = None):
+    def __init__(self, img_nc_path: str, tile_sampler: BaseTileSampler, mask_nc_path: Optional[str] = None,
+                 sample_mask: Optional[np.ndarray] = None, use_channels: Optional[List[int]] = None):
         # Execute parent code for loading
         super().__init__(img_nc_path, mask_nc_path, sample_mask, use_channels=use_channels)
 
-        # Store vars
-        self.n_rand_tiles = n_rand_tiles
-        self.tile_size = tile_size
-        self.random_seed = random_seed
-
-        # Generate random crops/tile indices
-        rng = np.random.default_rng(seed=random_seed)
-        n_imgs = len(self.imgs)
-        orig_size = self.imgs.sizes["i"]  # assume quadratic images
-        self.img_inds = np.repeat(np.arange(n_imgs), n_rand_tiles)  # Repeat indices for each image
-        self.img_tile_inds = rng.integers(0, orig_size - tile_size + 1, size=(n_imgs * n_rand_tiles, 2))  # Random tile indices
+        # Get tiles from tile sampler
+        tile_sampler.fit(self.imgs)
+        self.img_inds = tile_sampler.get_img_inds()
+        self.img_tile_inds = tile_sampler.get_img_tile_inds()
+        self.tile_sampler = tile_sampler
 
     def __len__(self):
         return len(self.img_inds)
@@ -236,9 +259,10 @@ class KelpTiledDataset(KelpNCDataset):
     def __getitem__(self, idx):
         idx_img = self.img_inds[idx]
         tile_i, tile_j = self.img_tile_inds[idx]
+        tilesize = self.tile_sampler.tile_size
 
         img = self.imgs.isel(sample=idx_img)
-        img = img.sel(i=slice(tile_i, tile_i + self.tile_size), j=slice(tile_j, tile_j + self.tile_size))
+        img = img.sel(i=slice(tile_i, tile_i + tilesize), j=slice(tile_j, tile_j + tilesize))
         if self.use_channels is not None:
             img = img.isel(ch=self.use_channels)
 
@@ -246,7 +270,7 @@ class KelpTiledDataset(KelpNCDataset):
             mask = None
         else:
             mask = self.masks.isel(sample=idx_img)
-            mask = mask.sel(i=slice(tile_i, tile_i + self.tile_size), j=slice(tile_j, tile_j + self.tile_size))
+            mask = mask.sel(i=slice(tile_i, tile_i + tilesize), j=slice(tile_j, tile_j + tilesize))
 
         img, mask = self._apply_trafos(idx, img, mask)
         return img, mask

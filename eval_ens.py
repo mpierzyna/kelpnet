@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Type, Dict
 import pathlib
 
 import lightning as L
@@ -7,11 +7,13 @@ import tqdm
 import joblib
 
 import torch_simple_unet as unet
-from data import KelpTiledDataset
+import torch_simple_clf as clf
+from data import KelpTiledDataset, KelpNCDataset
+import shared
 
 
 class EnsemblePredictor:
-    def __init__(self, ckpt_files):
+    def __init__(self, model_class: Type[L.LightningModule], ckpt_files):
         self.used_ch = []
         for c in ckpt_files:
             _, _, used_ch, _, _, _ = c.stem.split("_")
@@ -20,16 +22,23 @@ class EnsemblePredictor:
             self.used_ch.append(used_ch)
 
         self.models = [
-            unet.LitUNet.load_from_checkpoint(ckpt_file)
+            model_class.load_from_checkpoint(ckpt_file)
             for ckpt_file in tqdm.tqdm(ckpt_files, desc="Loading models")
         ]
 
-    def predict(self, ds: KelpTiledDataset) -> List[torch.Tensor]:
-        if ds.use_channels is not None:
-            raise ValueError("Full dataset without channel selection is required.")
-
+    def test(self, ds: KelpNCDataset) -> Dict:
         trainer = L.Trainer(devices=1)
+        scores = []
+        for m, used_ch in zip(self.models, self.used_ch):
+            ds.use_channels = used_ch
+            loader = torch.utils.data.DataLoader(ds, batch_size=1024, num_workers=0, pin_memory=True)
+            scores_i = trainer.test(m, loader)
+            scores.append(scores_i)
 
+        return scores
+
+    def predict(self, ds: KelpNCDataset) -> List[torch.Tensor]:
+        trainer = L.Trainer(devices=1)
         y_hat = []
         for m, used_ch in zip(self.models, self.used_ch):
             ds.use_channels = used_ch
@@ -42,15 +51,34 @@ class EnsemblePredictor:
         return y_hat
 
 
-if __name__ == "__main__":
+def make_clf_pred():
     # Load dataset to RAM
-    _, _, ds_test = unet.get_dataset(use_channels=None, random_seed=1337)
+    _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="binary")
     ds_test.load()
 
     # Prepare ensemble
-    ckpt_files = sorted(pathlib.Path("ens_seg/20240214_101045").glob("*.ckpt"))
-    ens = EnsemblePredictor(ckpt_files)
+    ckpt_files = sorted(pathlib.Path("ens_clf/20240216_041023").glob("*.ckpt"))
+    ens = EnsemblePredictor(clf.LitBinaryClf, ckpt_files)
+
+    # Make prediction
+    scores = ens.test(ds_test)
+    y_hat = ens.predict(ds_test)
+    joblib.dump([scores, y_hat], "pred_clf.joblib")
+
+
+def make_seg_pred():
+    # Load dataset to RAM
+    _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="seg")
+    ds_test.load()
+
+    # Prepare ensemble
+    ckpt_files = sorted(pathlib.Path("").glob("*.ckpt"))
+    ens = EnsemblePredictor(unet.LitUNet, ckpt_files)
 
     # Make prediction
     y_hat = ens.predict(ds_test)
-    joblib.dump(y_hat, "pred.joblib")
+    joblib.dump(y_hat, "pred_seg.joblib")
+
+
+if __name__ == "__main__":
+    make_clf_pred()

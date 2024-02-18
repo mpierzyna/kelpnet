@@ -10,7 +10,7 @@ import numpy as np
 
 mode_settings = {
     "seg": {
-        "script": "torch_simple_seg.py",
+        "script": "torch_simple_unet.py",
         "ens_root": pathlib.Path("ens_seg"),
     },
     "clf": {
