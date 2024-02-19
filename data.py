@@ -1,6 +1,6 @@
 import enum
 import torch
-from typing import Optional, List, Tuple, Self
+from typing import Optional, List, Self
 import abc
 import pathlib
 import numpy as np
@@ -220,6 +220,7 @@ class BaseTileSampler(abc.ABC):
     def fit(self, imgs: xr.Dataset) -> Self:
         self.n_imgs_ = len(imgs)
         self.orig_size_ = imgs.sizes["i"]  # assume quadratic images
+        return self
 
     def get_img_inds(self) -> np.ndarray:
         """Repeat index of each image n_tiles times for each tile."""
@@ -239,6 +240,48 @@ class RandomTileSampler(BaseTileSampler):
         """Get `n_tiles` random tile indices per image based on `tile_size` and `orig_size_` of images"""
         rng = np.random.default_rng(seed=self.random_seed)
         return rng.integers(0, self.orig_size_ - self.tile_size + 1, size=(self.n_imgs_ * self.n_tiles, 2))
+
+
+class RegularTileSampler(BaseTileSampler):
+    def __init__(self, tile_size: int, overlap: int):
+        # Number of tiles are computed during fitting
+        super().__init__(n_tiles=None, tile_size=tile_size)
+
+        # Guess for overlap
+        self.overlap = overlap
+
+    def fit(self, imgs: xr.Dataset) -> Self:
+        super().fit(imgs)
+        """
+        def optimize_overlap(w, x, o0):
+            o = o0
+            n = w // (x - o)
+            while (w % (x - o)) != 0:
+                o += 1
+            return o
+
+        # Optimize overlap to return even number of tiles
+        o = optimize_overlap(w=self.orig_size_, x=self.tile_size, o0=self.overlap)
+        if o != self.overlap:
+            print(f"Adjusted overlap from {self.overlap} to {o} to your dataset")
+            self.overlap = o
+        """
+
+        # Compute tiling indices
+        step = self.tile_size - self.overlap
+        inds_begin = np.arange(0, self.orig_size_ - self.tile_size + 1, step)
+        inds_begin = [*inds_begin, self.orig_size_ - self.tile_size]
+
+        ii, jj = np.meshgrid(inds_begin, inds_begin)
+        inds = np.array([ii.ravel(), jj.ravel()]).T
+
+        self.n_tiles = len(inds)
+        self.overlap_ = self.overlap
+        self.step_ = step
+        self.inds_ = inds
+
+    def get_img_tile_inds(self):
+        return np.concatenate([self.inds_ for _ in range(self.n_imgs_)], axis=0)
 
 
 class KelpTiledDataset(KelpNCDataset):

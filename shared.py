@@ -6,7 +6,7 @@ import torch
 
 import trafos
 from data import Channel as Ch
-from data import KelpTiledDataset, get_train_val_test_masks, RandomTileSampler, KelpNCDataset
+from data import KelpTiledDataset, KelpNCDataset, get_train_val_test_masks, RandomTileSampler, RegularTileSampler
 
 torch.set_float32_matmul_precision("high")
 
@@ -94,47 +94,25 @@ def get_dataset(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
     - `split_seed` should be the same for all members to get reproducible (independent) train/val/test splits.
     - `tile_seed` should be different for each member to get different random tiles for each member.
     """
-    tile_sampler = RandomTileSampler(n_tiles=25, tile_size=64, random_seed=tile_seed)
-    ds_kwargs = {
-        "img_nc_path": "data_ncf/train_imgs_fe.nc",
-        "mask_nc_path": "data_ncf/train_masks.ncf",
-        "tile_sampler": tile_sampler,
-        "use_channels": use_channels,
-    }
-    ds = KelpTiledDataset(**ds_kwargs)
-
-    # Split data into train/val/test
-    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds.imgs), random_seed=split_seed)
-
-    # Load dataset without outlier filter
-    ds_train = KelpTiledDataset(**ds_kwargs, sample_mask=mask_train)
-    apply_train_trafos(ds_train, mode=mode)
-
-    ds_val = KelpTiledDataset(**ds_kwargs, sample_mask=mask_val)
-    ds_test = KelpTiledDataset(**ds_kwargs, sample_mask=mask_test)
-    apply_infer_trafos(ds_val, mode=mode)
-    apply_infer_trafos(ds_test, mode=mode)
-
-    return ds_train, ds_val, ds_test
-
-
-def get_untiled_dataset(use_channels: Optional[List[int]], split_seed: int, mode: str):
+    tile_size = 64
+    random_ts = RandomTileSampler(n_tiles=25, tile_size=tile_size, random_seed=tile_seed)
+    regular_ts = RegularTileSampler(tile_size=tile_size, overlap=16)
     ds_kwargs = {
         "img_nc_path": "data_ncf/train_imgs_fe.nc",
         "mask_nc_path": "data_ncf/train_masks.ncf",
         "use_channels": use_channels,
     }
-    ds = KelpNCDataset(**ds_kwargs)
+    ds = KelpNCDataset(**ds_kwargs)  # Only load standard dataset for shape info for splitting
 
     # Split data into train/val/test
     mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds.imgs), random_seed=split_seed)
 
     # Load dataset without outlier filter
-    ds_train = KelpNCDataset(**ds_kwargs, sample_mask=mask_train)
+    ds_train = KelpTiledDataset(**ds_kwargs, sample_mask=mask_train, tile_sampler=random_ts)
     apply_train_trafos(ds_train, mode=mode)
 
-    ds_val = KelpNCDataset(**ds_kwargs, sample_mask=mask_val)
-    ds_test = KelpNCDataset(**ds_kwargs, sample_mask=mask_test)
+    ds_val = KelpTiledDataset(**ds_kwargs, sample_mask=mask_val, tile_sampler=random_ts)
+    ds_test = KelpTiledDataset(**ds_kwargs, sample_mask=mask_test, tile_sampler=regular_ts)
     apply_infer_trafos(ds_val, mode=mode)
     apply_infer_trafos(ds_test, mode=mode)
 

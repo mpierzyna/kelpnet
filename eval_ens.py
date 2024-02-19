@@ -63,7 +63,6 @@ def cli():
 def make_clf_pred():
     # Load dataset to RAM
     _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="binary")
-    # _, _, ds_test = shared.get_untiled_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, mode="binary")
     ds_test.load()
 
     # Prepare ensemble
@@ -73,14 +72,13 @@ def make_clf_pred():
     # Make prediction
     scores = ens.test(ds_test)
     y_hat = ens.predict(ds_test)
-    joblib.dump([scores, y_hat], "pred_clf.joblib")
+    joblib.dump([scores, y_hat, ens.used_ch], "pred_clf.joblib")
 
 
 @cli.command()
 def make_seg_pred():
     # Load dataset to RAM
     _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="seg")
-    # _, _, ds_test = shared.get_untiled_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, mode="binary")
     ds_test.load()
 
     # Prepare ensemble
@@ -90,7 +88,7 @@ def make_seg_pred():
     # Make prediction
     scores = ens.test(ds_test)
     y_hat = ens.predict(ds_test)
-    joblib.dump([scores, y_hat], "pred_seg.joblib")
+    joblib.dump([scores, y_hat, ens.used_ch], "pred_seg.joblib")
 
 
 if __name__ == "__main__":
