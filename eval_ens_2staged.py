@@ -10,9 +10,15 @@ import numpy as np
 import torch
 
 import data
+import enum
 import shared
-from eval_ens import EnsemblePredictor
+from eval_ens import make_clf_pred, make_seg_pred
 import torchmetrics
+
+
+class PredMode(enum.StrEnum):
+    TEST = "test"
+    SUBMISSION = "submission"
 
 
 def get_val_score(ckpt):
@@ -89,14 +95,19 @@ def agg_bb_ens_pred(y_hat_bb: torch.Tensor, ts: data.RegularTileSampler, w: np.n
     return y_hat_aa
 
 
-def get_kelp_clf_mask_aa(clf_ens_dir: pathlib.Path, ts: data.RegularTileSampler) -> np.ndarray:
+def get_kelp_clf_mask_aa(clf_ens_dir: pathlib.Path, ts: data.RegularTileSampler, mode: PredMode) -> np.ndarray:
     print("Processing clf prediction...")
-    if not (clf_ens_dir / "pred_clf.joblib").exists():
-        raise ValueError(f"Predictions not found in {clf_ens_dir}.")
-
-    # Load precomputed predictions
     y_hat_bb: torch.Tensor
-    _, y_hat_bb, _ = joblib.load(clf_ens_dir / "pred_clf.joblib")
+
+    if mode == PredMode.TEST:
+        # Test mode: load precomputed predictions
+        _, y_hat_bb, _ = joblib.load(clf_ens_dir / "pred_clf.joblib")
+    elif mode == PredMode.SUBMISSION:
+        # Submission mode: make predictions now
+        ds = shared.get_submission_dataset()
+        _, y_hat_bb, _ = make_clf_pred(clf_ens_dir, ds, run_test=False)
+    else:
+        raise ValueError(f"Unknown mode {mode}.")
 
     # Load val scores for weighting
     w = get_ens_weights(clf_ens_dir)
@@ -110,14 +121,19 @@ def get_kelp_clf_mask_aa(clf_ens_dir: pathlib.Path, ts: data.RegularTileSampler)
     return y_hat_aa
 
 
-def get_kelp_seg_mask_aa(seg_ens_dir: pathlib.Path, ts: data.RandomTileSampler):
+def get_kelp_seg_mask_aa(seg_ens_dir: pathlib.Path, ts: data.RandomTileSampler, mode: PredMode) -> np.ndarray:
     print("Processing seg prediction...")
-    if not (seg_ens_dir / "pred_seg.joblib").exists():
-        raise ValueError(f"Predictions not found in {seg_ens_dir}.")
-
-    # Load precomputed predictions
     y_hat_bb: torch.Tensor
-    _, y_hat_bb, _ = joblib.load(seg_ens_dir / "pred_seg.joblib")
+
+    if mode == PredMode.TEST:
+        # Test mode: load precomputed predictions
+        _, y_hat_bb, _ = joblib.load(seg_ens_dir / "pred_seg.joblib")
+    elif mode == PredMode.SUBMISSION:
+        # Submission mode: make predictions now
+        ds = shared.get_submission_dataset()
+        _, y_hat_bb, _ = make_seg_pred(seg_ens_dir, ds, run_test=False)
+    else:
+        raise ValueError(f"Unknown mode {mode}.")
 
     # Load val scores for weighting
     w = get_ens_weights(seg_ens_dir)
@@ -131,10 +147,10 @@ def get_kelp_seg_mask_aa(seg_ens_dir: pathlib.Path, ts: data.RandomTileSampler):
     return y_hat_aa
 
 
-def get_2staged_kelp_mask_aa(clf_ens_dir: pathlib.Path, seg_ens_dir: pathlib.Path, ds: data.KelpTiledDataset) -> np.ndarray:
+def get_2staged_kelp_mask_aa(clf_ens_dir: pathlib.Path, seg_ens_dir: pathlib.Path, ds: data.KelpTiledDataset, mode: PredMode) -> np.ndarray:
     # Aggregate tile-based predictions of classifier (clf) and segmentation model (seg)
-    y_hat_clf_aa = get_kelp_clf_mask_aa(clf_ens_dir, ts=ds.tile_sampler)
-    y_hat_seg_aa = get_kelp_seg_mask_aa(seg_ens_dir, ts=ds.tile_sampler)
+    y_hat_clf_aa = get_kelp_clf_mask_aa(clf_ens_dir, ts=ds.tile_sampler, mode=mode)
+    y_hat_seg_aa = get_kelp_seg_mask_aa(seg_ens_dir, ts=ds.tile_sampler, mode=mode)
 
     # Get sea mask
     ds.load()
@@ -146,19 +162,21 @@ def get_2staged_kelp_mask_aa(clf_ens_dir: pathlib.Path, seg_ens_dir: pathlib.Pat
     return y_hat_seg_aa
 
 
-def main(mode: str):
+def main(mode: PredMode):
     clf_ens_dir = pathlib.Path("ens_clf/20240216_041023")
     seg_ens_dir = pathlib.Path("ens_seg/20240219_163535")
 
-    if mode == "test":
+    if mode == PredMode.TEST:
         _, _, ds = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="seg")
-    elif mode == "submission":
+    elif mode == PredMode.SUBMISSION:
         ds = shared.get_submission_dataset()
+    else:
+        raise ValueError(f"Unknown mode {mode}.")
 
     # Get 2-staged kelp mask
-    y_hat_aa = get_2staged_kelp_mask_aa(clf_ens_dir, seg_ens_dir, ds)
+    y_hat_aa = get_2staged_kelp_mask_aa(clf_ens_dir, seg_ens_dir, ds, mode)
 
-    if mode == "test":
+    if mode == PredMode.TEST:
         # No true data for submission mode
         y_true_aa = ds.masks.to_numpy()
         score = torchmetrics.functional.dice(

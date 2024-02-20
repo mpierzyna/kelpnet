@@ -1,4 +1,4 @@
-from typing import List, Type, Dict
+from typing import List, Type, Dict, Tuple
 import pathlib
 
 import click
@@ -64,10 +64,19 @@ def cli(ctx: click.Context, test):
 @cli.command(name="clf")
 @click.argument("ens_dir", type=str)
 @click.pass_obj
-def make_clf_pred(obj: Dict, ens_dir: str):
-    # Load dataset to RAM
+def make_clf_pred_cli(obj: Dict, ens_dir: str):
+    run_test = obj.get("test", True)
     _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="binary")
-    ds_test.load()
+    joblib.dump(make_seg_pred(
+        ens_dir=ens_dir,
+        ds=ds_test,
+        run_test=run_test
+    ), ens_dir / "pred_clf.joblib")
+
+
+def make_clf_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool) -> Tuple[Dict, torch.Tensor, List[int]]:
+    # Load dataset to RAM
+    ds.load()
 
     # Prepare ensemble
     ens_dir = pathlib.Path(ens_dir)
@@ -75,23 +84,31 @@ def make_clf_pred(obj: Dict, ens_dir: str):
     ens = EnsemblePredictor(clf.LitBinaryClf, ckpt_files, batch_size=1024)
 
     # Make prediction
-    test = obj.get("test", True)
-    if test:
-        scores = ens.test(ds_test)
+    if run_test:
+        scores = ens.test(ds)
     else:
         scores = [None for _ in ckpt_files]
+    y_hat = ens.predict(ds)
 
-    y_hat = ens.predict(ds_test)
-    joblib.dump([scores, y_hat, ens.used_ch], ens_dir / "pred_clf.joblib")
+    return scores, y_hat, ens.used_ch
 
 
 @cli.command(name="seg")
 @click.argument("ens_dir", type=str)
 @click.pass_obj
-def make_seg_pred(obj: Dict, ens_dir: str):
-    # Load dataset to RAM
+def make_seg_pred_cli(obj: Dict, ens_dir: str):
+    run_test = obj.get("test", True)
     _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="seg")
-    ds_test.load()
+    joblib.dump(make_seg_pred(
+        ens_dir=ens_dir,
+        ds=ds_test,
+        run_test=run_test
+    ), ens_dir / "pred_seg.joblib")
+
+
+def make_seg_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool) -> Tuple[Dict, torch.Tensor, List[int]]:
+    # Load dataset to RAM
+    ds.load()
 
     # Prepare ensemble
     ens_dir = pathlib.Path(ens_dir)
@@ -99,16 +116,14 @@ def make_seg_pred(obj: Dict, ens_dir: str):
     ens = EnsemblePredictor(unet.LitUNet, ckpt_files, batch_size=1024)
 
     # Make prediction
-    test = obj.get("test", True)
-    if test:
-        scores = ens.test(ds_test)
+    if run_test:
+        scores = ens.test(ds)
     else:
         scores = [None for _ in ckpt_files]
-    y_hat = ens.predict(ds_test)
-    joblib.dump([scores, y_hat, ens.used_ch], ens_dir / "pred_seg.joblib")
+    y_hat = ens.predict(ds)
+
+    return scores, y_hat, ens.used_ch
 
 
 if __name__ == "__main__":
-    # make_clf_pred()
-    # make_seg_pred()
     cli()
