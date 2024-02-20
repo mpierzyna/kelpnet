@@ -55,40 +55,57 @@ class EnsemblePredictor:
 
 
 @click.group()
-def cli():
-    ...
+@click.option("--test/--no-test", default=True)
+@click.pass_context
+def cli(ctx: click.Context, test):
+    ctx.obj = {"test": test}
 
 
-@cli.command()
-def make_clf_pred():
+@cli.command(name="clf")
+@click.argument("ens_dir", type=str)
+@click.pass_obj
+def make_clf_pred(obj: Dict, ens_dir: str):
     # Load dataset to RAM
     _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="binary")
     ds_test.load()
 
     # Prepare ensemble
-    ckpt_files = sorted(pathlib.Path("ens_clf/20240216_041023").glob("*.ckpt"))
+    ens_dir = pathlib.Path(ens_dir)
+    ckpt_files = sorted(ens_dir.glob("*.ckpt"))
     ens = EnsemblePredictor(clf.LitBinaryClf, ckpt_files, batch_size=1024)
 
     # Make prediction
-    scores = ens.test(ds_test)
+    test = obj.get("test", True)
+    if test:
+        scores = ens.test(ds_test)
+    else:
+        scores = [None for _ in ckpt_files]
+
     y_hat = ens.predict(ds_test)
-    joblib.dump([scores, y_hat, ens.used_ch], "pred_clf.joblib")
+    joblib.dump([scores, y_hat, ens.used_ch], ens_dir / "pred_clf.joblib")
 
 
-@cli.command()
-def make_seg_pred():
+@cli.command(name="seg")
+@click.argument("ens_dir", type=str)
+@click.pass_obj
+def make_seg_pred(obj: Dict, ens_dir: str):
     # Load dataset to RAM
     _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="seg")
     ds_test.load()
 
     # Prepare ensemble
-    ckpt_files = sorted(pathlib.Path("ens_seg/20240216_095221").glob("*.ckpt"))
+    ens_dir = pathlib.Path(ens_dir)
+    ckpt_files = sorted(ens_dir.glob("*.ckpt"))
     ens = EnsemblePredictor(unet.LitUNet, ckpt_files, batch_size=1024)
 
     # Make prediction
-    scores = ens.test(ds_test)
+    test = obj.get("test", True)
+    if test:
+        scores = ens.test(ds_test)
+    else:
+        scores = [None for _ in ckpt_files]
     y_hat = ens.predict(ds_test)
-    joblib.dump([scores, y_hat, ens.used_ch], "pred_seg.joblib")
+    joblib.dump([scores, y_hat, ens.used_ch], ens_dir / "pred_seg.joblib")
 
 
 if __name__ == "__main__":
