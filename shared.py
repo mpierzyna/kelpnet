@@ -120,6 +120,14 @@ def get_dataset(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
     return ds_train, ds_val, ds_test
 
 
+def get_submission_dataset() -> KelpTiledDataset:
+    tile_size = 64
+    regular_ts = RegularTileSampler(tile_size=tile_size, overlap=16)
+    ds = KelpTiledDataset(img_nc_path="data_ncf/test_imgs_fe.nc", mask_nc_path=None, tile_sampler=regular_ts)
+    apply_infer_trafos(ds, mode="seg")
+    return ds
+
+
 def get_loaders(use_channels: Optional[List[int]], split_seed: int, tile_seed: int, mode: str, **loader_kwargs):
     ds_train, ds_val, ds_test = get_dataset(use_channels=use_channels, split_seed=split_seed, tile_seed=tile_seed, mode=mode)
 

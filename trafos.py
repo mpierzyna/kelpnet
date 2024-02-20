@@ -121,6 +121,8 @@ def to_tensor(img, mask):
 
 
 def to_binary_kelp(img, mask):
+    if mask is None:
+        return img, mask
     return img, np.sum(mask) > 0
 
 
