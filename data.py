@@ -356,7 +356,7 @@ def split_train_test_val2(ds: KelpDataset, seed: int = 42):
     return ds_train, ds_val, ds_test
 
 
-def get_train_val_test_masks(n: int, random_seed: int = 42):
+def get_train_val_test_masks(n: int, random_seed: int):
     """Split dataset by index, so sub datasets are subclass of KelpDataset. That allows to individually apply trafos."""
     # Randomly shuffle dataset indices
     rng = np.random.default_rng(seed=random_seed)

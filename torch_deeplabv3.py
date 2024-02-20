@@ -1,7 +1,10 @@
 import logging
+import pathlib
 import warnings
+from typing import List, Optional
 
 import albumentations as A
+import click
 import lightning as L
 import lion_pytorch
 import numpy as np
@@ -12,14 +15,14 @@ import torch
 import torch.nn.functional as F
 import torch.utils.data
 import torchmetrics
-from lightning.pytorch.callbacks.early_stopping import EarlyStopping
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
 from torch import nn
 from torchvision.models.segmentation import (deeplabv3_resnet50,
                                              deeplabv3_resnet101)
 
+import shared
 import trafos
-from data import Channel as Ch
 from data import KelpNCDataset, get_train_val_test_masks
 
 torch.set_float32_matmul_precision("high")
@@ -30,18 +33,6 @@ warnings.filterwarnings("ignore", category=rasterio.errors.NotGeoreferencedWarni
 logger = logging.getLogger("kelp")
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("rasterio").setLevel(logging.ERROR)
-
-
-def drop_channels(img, mask):
-    """Drop channels with low importance from img.
-    Expects channels in last dimension.
-    """
-    # _, _, n_ch = img.shape
-    # to_drop = [Ch.R, Ch.G, Ch.B, Ch.IS_CLOUD]
-    # to_keep = [ch for ch in range(n_ch) if ch not in to_drop]
-    to_keep = [0, 1, 2, 6, 8, 9, 10, 11]
-    img = img[:, :, to_keep]
-    return img, mask
 
 
 class DeepLabV3(nn.Module):
@@ -179,7 +170,6 @@ def apply_train_trafos(ds: KelpNCDataset) -> None:
         res = aug_pipeline(image=img, mask=mask)
         return res["image"], res["mask"]
 
-    ds.add_transform(drop_channels)
     ds.add_transform(trafos.xr_to_np)
     ds.add_transform(apply_aug)  # Random augmentation only during training!
     ds.add_transform(trafos.channel_first)
@@ -187,15 +177,22 @@ def apply_train_trafos(ds: KelpNCDataset) -> None:
 
 
 def apply_infer_trafos(ds: KelpNCDataset) -> None:
-    ds.add_transform(drop_channels)
     ds.add_transform(trafos.xr_to_np)
     ds.add_transform(trafos.channel_first)
     ds.add_transform(trafos.to_tensor)
 
 
-def get_dataset(random_seed: int = 42):
+def get_dataset(use_channels: Optional[List[int]], random_seed: int):
     # Load dataset without outlier filter
-    ds = KelpNCDataset(img_nc_path="data_ncf/train_imgs_fe.nc", mask_nc_path="data_ncf/train_masks.ncf")
+    ds_kwargs = {
+        "img_nc_path": "data_ncf/train_imgs_fe.nc",
+        "mask_nc_path": "data_ncf/train_masks.ncf",
+        "use_channels": use_channels,
+    }
+    ds = KelpNCDataset(**ds_kwargs)
+    mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds), random_seed=random_seed)
+
+    """
     all_tiles = ds.tile_ids
 
     # Perform train/val/test split based on number of valid tiles only
@@ -207,21 +204,22 @@ def get_dataset(random_seed: int = 42):
     mask_train = np.isin(all_tiles, valid_tiles[mask_train])
     mask_val = np.isin(all_tiles, valid_tiles[mask_val])
     mask_test = np.isin(all_tiles, valid_tiles[mask_test])
+    """
 
     # Now perform loading on split and filtered dataset
-    ds_train = KelpNCDataset(img_nc_path=ds.img_nc_path, mask_nc_path=ds.mask_nc_path, sample_mask=mask_train)
+    ds_train = KelpNCDataset(**ds_kwargs, sample_mask=mask_train)
     apply_train_trafos(ds_train)
 
-    ds_val = KelpNCDataset(img_nc_path=ds.img_nc_path, mask_nc_path=ds.mask_nc_path, sample_mask=mask_val)
-    ds_test = KelpNCDataset(img_nc_path=ds.img_nc_path, mask_nc_path=ds.mask_nc_path, sample_mask=mask_test)
+    ds_val = KelpNCDataset(**ds_kwargs, sample_mask=mask_val)
+    ds_test = KelpNCDataset(**ds_kwargs, sample_mask=mask_test)
     apply_infer_trafos(ds_val)
     apply_infer_trafos(ds_test)
 
     return ds_train, ds_val, ds_test
 
 
-def get_loaders(kf_weighing: bool, random_seed: int = 42, **loader_kwargs):
-    ds_train, ds_val, ds_test = get_dataset(random_seed=random_seed)
+def get_loaders(*, use_channels: Optional[List[int]], kf_weighing: bool, random_seed: int, **loader_kwargs):
+    ds_train, ds_val, ds_test = get_dataset(use_channels=use_channels, random_seed=random_seed)
 
     if kf_weighing:
         # Use kelp fraction as sampling weights
@@ -260,23 +258,43 @@ def test_loaders():
     sys.exit(0)
 
 
-if __name__ == "__main__":
-    # test_loaders()
+def train(*, n_ch: Optional[int], i_member: int, ens_dir: str):
+    # Make sure ens_root exists and is empty
+    ens_dir = pathlib.Path(ens_dir)
+    ens_dir.mkdir(exist_ok=True, parents=True)
 
+    # Get random seed for this member
+    random_seed = shared.get_local_seed(i_member)
+
+    # Select channel subset
+    use_channels, n_ch = shared.get_channel_subset(n_ch, random_seed)
+    print(f"Member {i_member} uses channels: {use_channels}.")
+
+    # Setup loaders
     train_loader, val_loader, test_loader = get_loaders(
-        num_workers=8, batch_size=32, kf_weighing=False, random_seed=42
+        use_channels=use_channels, kf_weighing=False, random_seed=random_seed,
+        num_workers=8, batch_size=32, 
+    )
+
+    # Save best models
+    ckpt_callback = ModelCheckpoint(
+        save_top_k=1,
+        monitor="val_dice",
+        mode="max",
+        dirpath=ens_dir,
+        filename=f"dlv3_{i_member}_" + "-".join(use_channels.astype(str)) + "_{epoch:02d}_{val_dice:.2f}",
     )
 
     # Train
-    model = LitDeepLabV3(n_ch=8, ens_prediction=True, upsample_size=512,
+    model = LitDeepLabV3(n_ch=n_ch, ens_prediction=True, upsample_size=512,
                          lr=5e-4, lr_gamma=0.75, weight_decay=1e-1)
     trainer = L.Trainer(
-        # devices=1,
+        devices=[0, 1],
         max_epochs=20,
         log_every_n_steps=10,
         callbacks=[
-            # EarlyStopping(monitor="val_dice", patience=3, mode="max"),
-            LearningRateMonitor(logging_interval="epoch")
+            ckpt_callback,
+            LearningRateMonitor(logging_interval="epoch"),
         ],
     )
     trainer.fit(
@@ -286,5 +304,17 @@ if __name__ == "__main__":
     )
 
     # New trainer on just one device
-    trainer = L.Trainer(devices=1)
+    trainer = L.Trainer(devices=1, logger=False)
     trainer.test(model, dataloaders=test_loader)
+
+
+@click.command()
+@click.option("--ens_dir", type=str, default="ens_dlv3/dev")
+@click.argument("i_member", type=int)
+def train_cli(ens_dir: str, i_member: int):
+    train(n_ch=3, i_member=i_member, ens_dir=ens_dir)
+
+
+if __name__ == "__main__":
+    # test_loaders()
+    train_cli()
