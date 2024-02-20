@@ -5,20 +5,15 @@ Function and variable suffixes:
 """
 import pathlib
 
+import click
 import joblib
 import numpy as np
 import torch
+import torchmetrics.functional
 
 import data
-import enum
 import shared
-from eval_ens import make_clf_pred, make_seg_pred
-import torchmetrics
-
-
-class PredMode(enum.StrEnum):
-    TEST = "test"
-    SUBMISSION = "submission"
+from shared import PredMode
 
 
 def get_val_score(ckpt):
@@ -97,17 +92,10 @@ def agg_bb_ens_pred(y_hat_bb: torch.Tensor, ts: data.RegularTileSampler, w: np.n
 
 def get_kelp_clf_mask_aa(clf_ens_dir: pathlib.Path, ts: data.RegularTileSampler, mode: PredMode) -> np.ndarray:
     print("Processing clf prediction...")
-    y_hat_bb: torch.Tensor
 
-    if mode == PredMode.TEST:
-        # Test mode: load precomputed predictions
-        _, y_hat_bb, _ = joblib.load(clf_ens_dir / "pred_clf.joblib")
-    elif mode == PredMode.SUBMISSION:
-        # Submission mode: make predictions now
-        ds = shared.get_submission_dataset()
-        _, y_hat_bb, _ = make_clf_pred(clf_ens_dir, ds, run_test=False)
-    else:
-        raise ValueError(f"Unknown mode {mode}.")
+    # Load precomputed predictions
+    y_hat_bb: torch.Tensor
+    _, y_hat_bb, _ = joblib.load(clf_ens_dir / f"pred_clf_{mode}.joblib")
 
     # Load val scores for weighting
     w = get_ens_weights(clf_ens_dir)
@@ -123,17 +111,10 @@ def get_kelp_clf_mask_aa(clf_ens_dir: pathlib.Path, ts: data.RegularTileSampler,
 
 def get_kelp_seg_mask_aa(seg_ens_dir: pathlib.Path, ts: data.RandomTileSampler, mode: PredMode) -> np.ndarray:
     print("Processing seg prediction...")
-    y_hat_bb: torch.Tensor
 
-    if mode == PredMode.TEST:
-        # Test mode: load precomputed predictions
-        _, y_hat_bb, _ = joblib.load(seg_ens_dir / "pred_seg.joblib")
-    elif mode == PredMode.SUBMISSION:
-        # Submission mode: make predictions now
-        ds = shared.get_submission_dataset()
-        _, y_hat_bb, _ = make_seg_pred(seg_ens_dir, ds, run_test=False)
-    else:
-        raise ValueError(f"Unknown mode {mode}.")
+    # Load precomputed predictions
+    y_hat_bb: torch.Tensor
+    _, y_hat_bb, _ = joblib.load(seg_ens_dir / f"pred_seg_{mode}.joblib")
 
     # Load val scores for weighting
     w = get_ens_weights(seg_ens_dir)
@@ -147,10 +128,35 @@ def get_kelp_seg_mask_aa(seg_ens_dir: pathlib.Path, ts: data.RandomTileSampler, 
     return y_hat_aa
 
 
+def get_kelp_seg_dlv3_aa(ens_dir: pathlib.Path, mode: PredMode) -> np.ndarray:
+    print("Processing DLV3 seg prediction...")
+    y_hat_aa: torch.Tensor  # (m, n_aa, a, a)
+    _, y_hat_aa, _ = joblib.load(ens_dir / f"pred_dlv3_{mode}.joblib")
+
+    # Load val scores for weighting
+    w = get_ens_weights(ens_dir)
+    w = w[:, None, None, None]  # (m, 1, 1, 1)
+    print("ensemble weights:", w.flatten())
+
+    # Majority voting
+    y_hat_aa = (y_hat_aa > 0.5).float()  # per member (m, n_aa, a, a)
+    y_hat_aa = (y_hat_aa * w).sum(0)  # weighted majority vote (n_aa, a, a)
+    y_hat_aa = (y_hat_aa > 0.5).float()
+    print("pred agg:", y_hat_aa.shape, y_hat_aa.dtype)
+
+    # Aggregate ensembe and tiles
+    _, a, _ = y_hat_aa.shape
+    y_hat_aa = y_hat_aa.numpy()
+    print("pred kelp fraction", y_hat_aa.sum(-1).sum(-1) / a ** 2)
+
+    return y_hat_aa
+
+
 def get_2staged_kelp_mask_aa(clf_ens_dir: pathlib.Path, seg_ens_dir: pathlib.Path, ds: data.KelpTiledDataset, mode: PredMode) -> np.ndarray:
     # Aggregate tile-based predictions of classifier (clf) and segmentation model (seg)
     y_hat_clf_aa = get_kelp_clf_mask_aa(clf_ens_dir, ts=ds.tile_sampler, mode=mode)
-    y_hat_seg_aa = get_kelp_seg_mask_aa(seg_ens_dir, ts=ds.tile_sampler, mode=mode)
+    # y_hat_seg_aa = get_kelp_seg_mask_aa(seg_ens_dir, ts=ds.tile_sampler, mode=mode)
+    y_hat_seg_aa = get_kelp_seg_dlv3_aa(seg_ens_dir, mode=mode)
 
     # Get sea mask
     ds.load()
@@ -162,9 +168,12 @@ def get_2staged_kelp_mask_aa(clf_ens_dir: pathlib.Path, seg_ens_dir: pathlib.Pat
     return y_hat_seg_aa
 
 
+@click.command()
+@click.argument("mode", type=PredMode)
 def main(mode: PredMode):
     clf_ens_dir = pathlib.Path("ens_clf/20240216_041023")
-    seg_ens_dir = pathlib.Path("ens_seg/20240219_163535")
+    # seg_ens_dir = pathlib.Path("ens_seg/20240219_163535")
+    seg_ens_dir = pathlib.Path("ens_dlv3/dev")
 
     if mode == PredMode.TEST:
         _, _, ds = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="seg")
@@ -190,4 +199,4 @@ def main(mode: PredMode):
 
 
 if __name__ == "__main__":
-    main("test")
+    main()

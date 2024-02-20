@@ -1,22 +1,22 @@
-from typing import List, Type, Dict, Tuple, Optional, Union
 import pathlib
+from typing import Dict, List, Tuple, Type
 
 import click
+import joblib
 import lightning as L
 import torch
 import tqdm
-import joblib
 
-import torch_simple_unet as unet
-import torch_simple_clf as clf
-import torch_deeplabv3 as dlv3
-from data import KelpTiledDataset, KelpNCDataset
 import shared
+import torch_deeplabv3 as dlv3
+import torch_simple_clf as clf
+import torch_simple_unet as unet
+from data import KelpNCDataset, KelpTiledDataset
+from shared import PredMode
 
 
 class EnsemblePredictor:
-    def __init__(self, model_class: Type[L.LightningModule], ckpt_files: List[pathlib.Path],
-                 devices: Optional[Union[int, List[int]]] = 1, **loader_kwargs) -> None:
+    def __init__(self, model_class: Type[L.LightningModule], ckpt_files: List[pathlib.Path], device: int, **loader_kwargs) -> None:
         self.used_ch = []
         for c in ckpt_files:
             _, _, used_ch, _, _, _ = c.stem.split("_")
@@ -29,7 +29,7 @@ class EnsemblePredictor:
             for ckpt_file in tqdm.tqdm(ckpt_files, desc="Loading models")
         ]
 
-        self.devices = devices
+        self.device = device
         self.loader_kwargs = {
             "batch_size": 1024,
             "num_workers": 0,
@@ -38,9 +38,7 @@ class EnsemblePredictor:
         }
 
     def test(self, ds: KelpNCDataset) -> Dict:
-        # Only use single GPU for testing. Use last one in list if multiple are given.
-        devices = self.devices[-1] if isinstance(self.devices, list) else self.devices
-        trainer = L.Trainer(devices=devices)
+        trainer = L.Trainer(devices=[self.device])
         scores = []
         for m, used_ch in zip(self.models, self.used_ch):
             ds.use_channels = used_ch
@@ -51,7 +49,7 @@ class EnsemblePredictor:
         return scores
 
     def predict(self, ds: KelpNCDataset) -> List[torch.Tensor]:
-        trainer = L.Trainer(devices=self.devices)
+        trainer = L.Trainer(devices=[self.device])
         y_hat = []
         for m, used_ch in zip(self.models, self.used_ch):
             ds.use_channels = used_ch
@@ -65,35 +63,45 @@ class EnsemblePredictor:
 
 
 @click.group()
-@click.option("--test/--no-test", default=True)
+@click.option("--test/--no-test", default=False, is_flag=True)
+@click.option("--device", type=int, default=0)
+@click.argument("mode", type=PredMode, required=True)
 @click.pass_context
-def cli(ctx: click.Context, test):
-    ctx.obj = {"test": test}
+def cli(ctx: click.Context, test: bool, device: int, mode: PredMode):
+    ctx.obj = {
+        "test": test,
+        "mode": mode,
+        "device": device,
+    }
 
 
 @cli.command(name="clf")
 @click.argument("ens_dir", type=str)
 @click.pass_obj
 def make_clf_pred_cli(obj: Dict, ens_dir: str):
-    run_test = obj.get("test", True)
+    mode = obj.get("mode")
     ens_dir = pathlib.Path(ens_dir)
-    _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="binary")
+    if mode is PredMode.TEST:
+        _, _, ds = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="binary")
+    elif mode is PredMode.SUBMISSION:
+        ds = shared.get_submission_dataset()
+    else:
+        raise ValueError(f"Unknown mode {mode}.")
 
-    joblib.dump(make_seg_pred(
-        ens_dir=ens_dir,
-        ds=ds_test,
-        run_test=run_test
-    ), ens_dir / "pred_clf.joblib")
+    joblib.dump(
+        make_clf_pred(ens_dir=ens_dir, ds=ds, run_test=obj["test"], device=obj["device"]),
+        ens_dir / f"pred_clf_{mode}.joblib"
+    )
 
 
-def make_clf_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool) -> Tuple[Dict, torch.Tensor, List[int]]:
+def make_clf_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool, device: int = 0) -> Tuple[Dict, torch.Tensor, List[int]]:
     # Load dataset to RAM
     ds.load()
 
     # Prepare ensemble
     ens_dir = pathlib.Path(ens_dir)
     ckpt_files = sorted(ens_dir.glob("*.ckpt"))
-    ens = EnsemblePredictor(clf.LitBinaryClf, ckpt_files, batch_size=1024)
+    ens = EnsemblePredictor(clf.LitBinaryClf, ckpt_files, batch_size=1024, device=device)
 
     # Make prediction
     if run_test:
@@ -109,25 +117,29 @@ def make_clf_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool) -> Tuple[D
 @click.argument("ens_dir", type=str)
 @click.pass_obj
 def make_seg_pred_cli(obj: Dict, ens_dir: str):
-    run_test = obj.get("test", True)
+    mode = obj.get("mode")
     ens_dir = pathlib.Path(ens_dir)
-    _, _, ds_test = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="seg")
+    if mode is PredMode.TEST:
+        _, _, ds = shared.get_dataset(use_channels=None, split_seed=shared.GLOBAL_SEED, tile_seed=1337, mode="binary")
+    elif mode is PredMode.SUBMISSION:
+        ds = shared.get_submission_dataset()
+    else:
+        raise ValueError(f"Unknown mode {mode}.")
 
-    joblib.dump(make_seg_pred(
-        ens_dir=ens_dir,
-        ds=ds_test,
-        run_test=run_test
-    ), ens_dir / "pred_seg.joblib")
+    joblib.dump(
+        make_seg_pred(ens_dir=ens_dir, ds=ds, run_test=obj["test"], device=obj["device"]),
+        ens_dir / f"pred_seg_{mode}.joblib"
+    )
 
 
-def make_seg_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool) -> Tuple[Dict, torch.Tensor, List[int]]:
+def make_seg_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool, device: int = 0) -> Tuple[Dict, torch.Tensor, List[int]]:
     # Load dataset to RAM
     ds.load()
 
     # Prepare ensemble
     ens_dir = pathlib.Path(ens_dir)
     ckpt_files = sorted(ens_dir.glob("*.ckpt"))
-    ens = EnsemblePredictor(unet.LitUNet, ckpt_files, batch_size=1024)
+    ens = EnsemblePredictor(unet.LitUNet, ckpt_files, batch_size=1024, device=device)
 
     # Make prediction
     if run_test:
@@ -143,22 +155,26 @@ def make_seg_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool) -> Tuple[D
 @click.argument("ens_dir", type=str)
 @click.pass_obj
 def make_dlv3_pred_cli(obj: Dict, ens_dir: str):
-    run_test = obj.get("test", True)
+    mode = obj.get("mode")
     ens_dir = pathlib.Path(ens_dir)
-    _, _, ds_test = dlv3.get_dataset(use_channels=None, random_seed=shared.GLOBAL_SEED)
+    if mode is PredMode.TEST:
+        _, _, ds = dlv3.get_dataset(use_channels=None, random_seed=shared.GLOBAL_SEED)
+    elif mode is PredMode.SUBMISSION:
+        ds = dlv3.get_submission_dataset()
+    else:
+        raise ValueError(f"Unknown mode {mode}.")
 
-    joblib.dump(make_dlv3_pred(
-        ens_dir=ens_dir,
-        ds=ds_test,
-        run_test=run_test
-    ), ens_dir / "pred_dlv3.joblib")
+    joblib.dump(
+        make_dlv3_pred(ens_dir=ens_dir, ds=ds, run_test=obj["test"], device=obj["device"]),
+        ens_dir / f"pred_dlv3_{mode}.joblib"
+    )
 
 
-def make_dlv3_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool) -> Tuple[Dict, torch.Tensor, List[int]]:
+def make_dlv3_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool, device: int = 0) -> Tuple[Dict, torch.Tensor, List[int]]:
     # Prepare ensemble
     ens_dir = pathlib.Path(ens_dir)
     ckpt_files = sorted(ens_dir.glob("*.ckpt"))
-    ens = EnsemblePredictor(dlv3.LitDeepLabV3, ckpt_files, batch_size=32, num_workers=8, devices=[1, 2])
+    ens = EnsemblePredictor(dlv3.LitDeepLabV3, ckpt_files, batch_size=32, num_workers=8, device=device)
 
     # Make prediction
     if run_test:

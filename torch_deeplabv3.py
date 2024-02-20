@@ -237,6 +237,12 @@ def get_dataset(use_channels: Optional[List[int]], random_seed: int):
     return ds_train, ds_val, ds_test
 
 
+def get_submission_dataset():
+    ds = KelpNCDataset(img_nc_path="data_ncf/test_imgs_fe.nc", mask_nc_path=None)
+    apply_infer_trafos(ds)
+    return ds
+
+
 def get_loaders(*, use_channels: Optional[List[int]], kf_weighing: bool, random_seed: int, **loader_kwargs):
     ds_train, ds_val, ds_test = get_dataset(use_channels=use_channels, random_seed=random_seed)
 
@@ -292,7 +298,7 @@ def train(*, n_ch: Optional[int], i_member: int, ens_dir: str):
     # Setup loaders
     train_loader, val_loader, test_loader = get_loaders(
         use_channels=use_channels, kf_weighing=False, random_seed=random_seed,
-        num_workers=8, batch_size=32, 
+        num_workers=8, batch_size=32,
     )
 
     # Save best models

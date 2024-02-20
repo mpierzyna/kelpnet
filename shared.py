@@ -1,3 +1,4 @@
+import enum
 from typing import List, Optional, Tuple
 
 import albumentations as A
@@ -6,7 +7,8 @@ import torch
 
 import trafos
 from data import Channel as Ch
-from data import KelpTiledDataset, KelpNCDataset, get_train_val_test_masks, RandomTileSampler, RegularTileSampler
+from data import (KelpNCDataset, KelpTiledDataset, RandomTileSampler,
+                  RegularTileSampler, get_train_val_test_masks)
 
 torch.set_float32_matmul_precision("high")
 
@@ -27,6 +29,11 @@ VALID_CHANNELS = [
     Ch.EVI,
     Ch.CARI,
 ]
+
+
+class PredMode(enum.StrEnum):
+    TEST = "test"
+    SUBMISSION = "submission"
 
 
 def get_local_seed(i_member: int) -> int:
@@ -146,3 +153,8 @@ def get_loaders(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
     test_loader = torch.utils.data.DataLoader(ds_test, **loader_kwargs)
 
     return train_loader, val_loader, test_loader
+
+
+if __name__ == "__main__":
+    _, _, ds_test = get_dataset(use_channels=None, split_seed=GLOBAL_SEED, tile_seed=1337, mode="clf")
+    pass
