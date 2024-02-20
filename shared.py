@@ -95,8 +95,6 @@ def get_dataset(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
     - `tile_seed` should be different for each member to get different random tiles for each member.
     """
     tile_size = 64
-    random_ts = RandomTileSampler(n_tiles=25, tile_size=tile_size, random_seed=tile_seed)
-    regular_ts = RegularTileSampler(tile_size=tile_size, overlap=16)
     ds_kwargs = {
         "img_nc_path": "data_ncf/train_imgs_fe.nc",
         "mask_nc_path": "data_ncf/train_masks.ncf",
@@ -108,11 +106,14 @@ def get_dataset(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
     mask_train, mask_val, mask_test = get_train_val_test_masks(len(ds.imgs), random_seed=split_seed)
 
     # Load dataset without outlier filter
-    ds_train = KelpTiledDataset(**ds_kwargs, sample_mask=mask_train, tile_sampler=random_ts)
+    ds_train = KelpTiledDataset(**ds_kwargs, sample_mask=mask_train,
+                                tile_sampler=RandomTileSampler(n_tiles=50, tile_size=tile_size, random_seed=tile_seed))
     apply_train_trafos(ds_train, mode=mode)
 
-    ds_val = KelpTiledDataset(**ds_kwargs, sample_mask=mask_val, tile_sampler=random_ts)
-    ds_test = KelpTiledDataset(**ds_kwargs, sample_mask=mask_test, tile_sampler=regular_ts)
+    ds_val = KelpTiledDataset(**ds_kwargs, sample_mask=mask_val,
+                              tile_sampler=RegularTileSampler(tile_size=tile_size, overlap=16))
+    ds_test = KelpTiledDataset(**ds_kwargs, sample_mask=mask_test,
+                               tile_sampler=RegularTileSampler(tile_size=tile_size, overlap=16))
     apply_infer_trafos(ds_val, mode=mode)
     apply_infer_trafos(ds_test, mode=mode)
 
@@ -124,6 +125,8 @@ def get_loaders(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
 
     # Load data to RAM for fast training
     ds_train.load()
+    if mode == "seg":
+        ds_train.drop_no_kelp()
     ds_val.load()
     ds_test.load()
 

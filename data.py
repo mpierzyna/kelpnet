@@ -8,6 +8,7 @@ import rasterio
 import pandas as pd
 import logging
 import xarray as xr
+import tqdm
 
 from torch.utils.data import Dataset
 
@@ -318,17 +319,21 @@ class KelpTiledDataset(KelpNCDataset):
         img, mask = self._apply_trafos(idx, img, mask)
         return img, mask
 
-    @classmethod
-    def only_with_kelp(cls, **kwargs):
-        """Create a new KelpTiledDataset with only samples that contain kelp."""
-        # Load dataset
-        ds = cls(**kwargs)
-
-        # Get kelp mask
-        has_kelp = ds.masks.sum(["i", "j"]) > 0
-
-        # Create new dataset with only kelp samples
-        return cls(**kwargs, sample_mask=has_kelp)
+    def drop_no_kelp(self):
+        """Drop samples without kelp."""
+        n = len(self)
+        has_kelp = [
+            self.masks.isel(sample=i).sel(
+                i=slice(tile_i, tile_i + self.tile_sampler.tile_size),
+                j=slice(tile_j, tile_j + self.tile_sampler.tile_size)
+            ).sum() > 0
+            for (i, (tile_i, tile_j))
+            in tqdm.tqdm(zip(self.img_inds, self.img_tile_inds), desc="Dropping no kelp samples", total=n)
+        ]
+        has_kelp = np.array(has_kelp)
+        self.img_inds = self.img_inds[has_kelp]
+        self.img_tile_inds = self.img_tile_inds[has_kelp]
+        print(f"Dropped {(n-len(self)) / n:.2%} of samples without kelp.")
 
 
 def split_train_test_val(ds: KelpDataset, seed=42):
@@ -378,7 +383,6 @@ def get_train_val_test_masks(n: int, random_seed: int = 42):
 
 
 if __name__ == "__main__":
-    import tqdm
     ds_kwargs = {
         "img_nc_path": "data_ncf/train_imgs_fe.nc",
         "mask_nc_path": "data_ncf/train_masks.ncf",
