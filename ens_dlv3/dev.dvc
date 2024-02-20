@@ -1,0 +1,6 @@
+outs:
+- md5: 8418b39b5edd5eddaa45423861a4fcd7.dir
+  size: 4429529173
+  nfiles: 10
+  hash: md5
+  path: dev
