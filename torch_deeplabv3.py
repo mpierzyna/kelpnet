@@ -20,6 +20,9 @@ from lightning.pytorch.callbacks.lr_monitor import LearningRateMonitor
 from torch import nn
 from torchvision.models.segmentation import (deeplabv3_resnet50,
                                              deeplabv3_resnet101)
+from torchvision.models.segmentation import deeplabv3 as tv_dlv3
+from torchvision.models import resnet18, resnet34
+from torchvision.models._utils import IntermediateLayerGetter
 
 import shared
 import trafos
@@ -41,6 +44,22 @@ class DeepLabV3(nn.Module):
 
         self.n_ch = n_ch
         self.upsample_size = upsample_size
+
+        """
+        # Use ResNet backbone
+        backbone = resnet34()
+        if n_ch != 3:
+            # If channels != 3, modified first layer to accept n_ch channels 
+            backbone.conv1 = nn.Conv2d(n_ch, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        backbone = IntermediateLayerGetter(backbone, return_layers={"layer4": "out"})
+        self.backbone = backbone
+
+        # Set Deeplab head
+        self.classifier = tv_dlv3.DeepLabHead(512, 1)
+
+        # Combine backbone and head
+        self.model = tv_dlv3.DeepLabV3(self.backbone, self.classifier)
+        """
 
         # Load a preconfigured DeepLabV3 with one output class
         self.model = deeplabv3_resnet50(num_classes=1)
@@ -130,7 +149,7 @@ class LitDeepLabV3(L.LightningModule):
 
         loss = self.crit(y_hat, y)
         self.log(f"{prefix}_loss", loss, sync_dist=True)
-        self.log(f"{prefix}_dice", self.dice(y_hat, y.int()), sync_dist=True)
+        self.log(f"{prefix}_dice", self.dice(y_hat, y.int()), sync_dist=True, prog_bar=True)
 
         return loss
 
@@ -289,7 +308,7 @@ def train(*, n_ch: Optional[int], i_member: int, ens_dir: str):
     model = LitDeepLabV3(n_ch=n_ch, ens_prediction=True, upsample_size=512,
                          lr=5e-4, lr_gamma=0.75, weight_decay=1e-1)
     trainer = L.Trainer(
-        devices=[0, 1],
+        devices=[1, 2],
         max_epochs=20,
         log_every_n_steps=10,
         callbacks=[
