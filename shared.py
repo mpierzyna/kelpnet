@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 import albumentations as A
 import numpy as np
 import torch
+import warnings
 
 import trafos
 from data import Channel as Ch
@@ -114,7 +115,7 @@ def get_dataset(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
 
     # Load dataset without outlier filter
     ds_train = KelpTiledDataset(**ds_kwargs, sample_mask=mask_train,
-                                tile_sampler=RandomTileSampler(n_tiles=50, tile_size=tile_size, random_seed=tile_seed))
+                                tile_sampler=RandomTileSampler(n_tiles=25, tile_size=tile_size, random_seed=tile_seed))
     apply_train_trafos(ds_train, mode=mode)
 
     ds_val = KelpTiledDataset(**ds_kwargs, sample_mask=mask_val,
@@ -141,6 +142,7 @@ def get_loaders(use_channels: Optional[List[int]], split_seed: int, tile_seed: i
     # Load data to RAM for fast training
     ds_train.load()
     if mode == "seg":
+        warnings.warn("Dropping no kelp tiles from train set!")
         ds_train.drop_no_kelp()
     ds_val.load()
     ds_test.load()

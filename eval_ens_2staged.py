@@ -16,24 +16,18 @@ import shared
 from shared import PredMode
 
 
-def get_val_score(ckpt):
-    """Get validation score from checkpoint."""
-    cb = ckpt["callbacks"]
-    cb_key = None
-    for k in cb.keys():
-        if "ModelCheckpoint" in k:
-            cb_key = k
-            break
-    return float(cb[cb_key]["best_model_score"].cpu())
-
-
-def get_ens_weights(ckpt_dir: pathlib.Path):
+def get_ens_weights(val_scores, drop_outliers: bool = True):
     """Get ensemble weights from validation scores."""
-    seg_val_scores = np.array([
-        get_val_score(torch.load(ckpt_path))
-        for ckpt_path in sorted(ckpt_dir.glob("*.ckpt"))
-    ])
-    w = seg_val_scores / np.median(seg_val_scores)
+    val_scores = np.array(val_scores)
+    w = val_scores / np.median(val_scores)
+
+    if drop_outliers:
+        w_min = np.quantile(w, 0.05)
+        is_outlier = w < w_min
+        w[is_outlier] = 0
+        if np.any(is_outlier):
+            print("Dropped outliers:", np.where(is_outlier)[0])
+
     w = w / w.sum()
     return w
 
@@ -95,10 +89,10 @@ def get_kelp_clf_mask_aa(clf_ens_dir: pathlib.Path, ts: data.RegularTileSampler,
 
     # Load precomputed predictions
     y_hat_bb: torch.Tensor
-    _, y_hat_bb, _ = joblib.load(clf_ens_dir / f"pred_clf_{mode}.joblib")
+    scores, y_hat_bb, _ = joblib.load(clf_ens_dir / f"pred_clf_{mode}.joblib")
 
     # Load val scores for weighting
-    w = get_ens_weights(clf_ens_dir)
+    w = get_ens_weights(scores, drop_outliers=True)
     print("ensemble weights:", w)
 
     # Aggregate ensembe and tiles
@@ -114,10 +108,10 @@ def get_kelp_seg_mask_aa(seg_ens_dir: pathlib.Path, ts: data.RandomTileSampler, 
 
     # Load precomputed predictions
     y_hat_bb: torch.Tensor
-    _, y_hat_bb, _ = joblib.load(seg_ens_dir / f"pred_seg_{mode}.joblib")
+    scores, y_hat_bb, _ = joblib.load(seg_ens_dir / f"pred_seg_{mode}.joblib")
 
     # Load val scores for weighting
-    w = get_ens_weights(seg_ens_dir)
+    w = get_ens_weights(scores, drop_outliers=True)
     print("ensemble weights:", w)
 
     # Aggregate ensembe and tiles
@@ -131,10 +125,10 @@ def get_kelp_seg_mask_aa(seg_ens_dir: pathlib.Path, ts: data.RandomTileSampler, 
 def get_kelp_seg_dlv3_aa(ens_dir: pathlib.Path, mode: PredMode) -> np.ndarray:
     print("Processing DLV3 seg prediction...")
     y_hat_aa: torch.Tensor  # (m, n_aa, a, a)
-    _, y_hat_aa, _ = joblib.load(ens_dir / f"pred_dlv3_{mode}.joblib")
+    scores, y_hat_aa, _ = joblib.load(ens_dir / f"pred_dlv3_{mode}.joblib")
 
     # Load val scores for weighting
-    w = get_ens_weights(ens_dir)
+    w = get_ens_weights(scores, drop_outliers=True)
     w = w[:, None, None, None]  # (m, 1, 1, 1)
     print("ensemble weights:", w.flatten())
 
@@ -171,7 +165,7 @@ def get_2staged_kelp_mask_aa(clf_ens_dir: pathlib.Path, seg_ens_dir: pathlib.Pat
 @click.command()
 @click.argument("mode", type=PredMode)
 def main(mode: PredMode):
-    clf_ens_dir = pathlib.Path("ens_clf/20240216_041023")
+    clf_ens_dir = pathlib.Path("ens_clf/20240220_173645")
     # seg_ens_dir = pathlib.Path("ens_seg/20240219_163535")
     seg_ens_dir = pathlib.Path("ens_dlv3/dev")
 

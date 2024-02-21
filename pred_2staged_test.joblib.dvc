@@ -1,0 +1,5 @@
+outs:
+- md5: 79b5d0f1f3404fd43e49211ac296f024
+  size: 414540241
+  hash: md5
+  path: pred_2staged_test.joblib

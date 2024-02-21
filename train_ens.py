@@ -36,10 +36,11 @@ def run(script: str, ens_dir: pathlib.Path, log_dir: pathlib.Path, id_task: int,
 
 
 @click.command()
+@click.option("--first-member", "offset", type=int, default=0)
 @click.argument("mode", type=str)
 @click.argument("n_members", type=int)
 @click.argument("n_gpus", type=int)
-def train_ensemble(mode: str, n_members: int, n_gpus: int) -> None:
+def train_ensemble(offset: int, mode: str, n_members: int, n_gpus: int) -> None:
     if mode not in mode_settings:
         raise ValueError(f"Unknown mode {mode}.")
 
@@ -70,7 +71,7 @@ def train_ensemble(mode: str, n_members: int, n_gpus: int) -> None:
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=n_gpus) as executor:
         futures = []
-        for i in range(n_members):
+        for i in range(offset, n_members):
             f = executor.submit(acquire_gpu_and_run, i)
             futures.append(f)
         concurrent.futures.wait(futures)

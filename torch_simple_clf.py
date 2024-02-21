@@ -105,7 +105,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_dir: str):
     print(f"Member {i_member} uses channels: {use_channels}.")
 
     train_loader, val_loader, test_loader = shared.get_loaders(
-        use_channels=use_channels, split_seed=shared.GLOBAL_SEED, tile_seed=random_seed, mode="binary",
+        use_channels=use_channels, split_seed=random_seed + 1, tile_seed=random_seed, mode="binary",
         num_workers=0, batch_size=1024, pin_memory=True
     )
 
@@ -122,7 +122,7 @@ def train(*, n_ch: Optional[int],  i_member: int, i_device: int, ens_dir: str):
     model = LitBinaryClf(n_ch=n_ch)
     trainer = L.Trainer(
         devices=[i_device],
-        max_epochs=15,
+        max_epochs=20,
         log_every_n_steps=10,
         callbacks=[
             ckpt_callback,

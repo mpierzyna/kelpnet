@@ -5,7 +5,6 @@ import click
 import joblib
 import lightning as L
 import torch
-import tqdm
 
 import shared
 import torch_deeplabv3 as dlv3
@@ -24,11 +23,8 @@ class EnsemblePredictor:
             used_ch = [int(ch) for ch in used_ch]
             self.used_ch.append(used_ch)
 
-        self.models = [
-            model_class.load_from_checkpoint(ckpt_file)
-            for ckpt_file in tqdm.tqdm(ckpt_files, desc="Loading models")
-        ]
-
+        self.model_class = model_class
+        self.ckpt_files = ckpt_files
         self.device = device
         self.loader_kwargs = {
             "batch_size": 1024,
@@ -37,23 +33,42 @@ class EnsemblePredictor:
             **loader_kwargs  # Override defaults
         }
 
-    def test(self, ds: KelpNCDataset) -> Dict:
-        trainer = L.Trainer(devices=[self.device])
+    def get_val_scores(self) -> List[float]:
+        """Get validation score from checkpoint."""
         scores = []
-        for m, used_ch in zip(self.models, self.used_ch):
-            ds.use_channels = used_ch
-            loader = torch.utils.data.DataLoader(ds, **self.loader_kwargs)
-            scores_i = trainer.test(m, loader)
-            scores.append(scores_i)
+        for ckpt in self.ckpt_files:
+            ckpt = torch.load(ckpt, map_location="cpu")
+
+            # Find key for ModelCheckpoint callback
+            cb = ckpt["callbacks"]
+            cb_key = None
+            for k in cb.keys():
+                if "ModelCheckpoint" in k:
+                    cb_key = k
+                break
+
+            if cb_key is None:
+                scores.append(None)
+            else:
+                scores.append(float(cb[cb_key]["best_model_score"]))
 
         return scores
+
+    def test(self, ds: KelpNCDataset) -> Dict:
+        raise NotImplementedError()
 
     def predict(self, ds: KelpNCDataset) -> List[torch.Tensor]:
         trainer = L.Trainer(devices=[self.device])
         y_hat = []
-        for m, used_ch in zip(self.models, self.used_ch):
+        for ckpt_path, used_ch in zip(self.ckpt_files, self.used_ch):
+            print(f"Processing {ckpt_path.stem}...")
+
+            # Prepare dataset with channels used for training
             ds.use_channels = used_ch
             loader = torch.utils.data.DataLoader(ds, **self.loader_kwargs)
+
+            # Load model from checkpoint and make prediction
+            m = self.model_class.load_from_checkpoint(ckpt_path)
             y_hat_i = trainer.predict(m, loader)
             y_hat_i = torch.cat(y_hat_i, dim=0)
             y_hat.append(y_hat_i)
@@ -107,7 +122,7 @@ def make_clf_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool, device: in
     if run_test:
         scores = ens.test(ds)
     else:
-        scores = [None for _ in ckpt_files]
+        scores = ens.get_val_scores()
     y_hat = ens.predict(ds)
 
     return scores, y_hat, ens.used_ch
@@ -145,7 +160,7 @@ def make_seg_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool, device: in
     if run_test:
         scores = ens.test(ds)
     else:
-        scores = [None for _ in ckpt_files]
+        scores = ens.get_val_scores()
     y_hat = ens.predict(ds)
 
     return scores, y_hat, ens.used_ch
@@ -180,7 +195,7 @@ def make_dlv3_pred(ens_dir: str, ds: KelpTiledDataset, run_test: bool, device: i
     if run_test:
         scores = ens.test(ds)
     else:
-        scores = [None for _ in ckpt_files]
+        scores = ens.get_val_scores()
     y_hat = ens.predict(ds)
 
     return scores, y_hat, ens.used_ch
