@@ -9,10 +9,10 @@ import click
 import numpy as np
 
 mode_settings = {
-    "seg": {
-        "script": "torch_simple_unet.py",
-        "ens_root": pathlib.Path("ens_seg"),
-    },
+    # "seg": {
+    #     "script": "torch_simple_unet.py",
+    #     "ens_root": pathlib.Path("ens_seg"),
+    # },
     "clf": {
         "script": "torch_simple_clf.py",
         "ens_root": pathlib.Path("ens_clf"),
