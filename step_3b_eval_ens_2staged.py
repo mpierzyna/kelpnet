@@ -97,6 +97,7 @@ def get_kelp_clf_mask_aa(clf_ens_dir: pathlib.Path, ts: data.RegularTileSampler,
 
     # Aggregate ensembe and tiles
     y_hat_aa = agg_bb_ens_pred(y_hat_bb, ts, w)
+    joblib.dump(y_hat_aa, f"pred_clf_{mode}_agg_aa.joblib")
     y_hat_aa = np.ceil(y_hat_aa)  # If in doubt, consider as kelp
     print("pred kelp fraction:", y_hat_aa.sum(-1).sum(-1) / ts.orig_size_ ** 2)
 

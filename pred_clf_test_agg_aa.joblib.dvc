@@ -1,0 +1,5 @@
+outs:
+- md5: 0b8e5855cd26b50d128eaaa9fb38c808
+  size: 414540241
+  hash: md5
+  path: pred_clf_test_agg_aa.joblib

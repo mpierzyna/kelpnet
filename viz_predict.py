@@ -18,25 +18,42 @@ def load_data():
 
     # Prediction (Segmentation)
     scores, y_hat_aa, _ = joblib.load("ens_dlv3/dev/pred_dlv3_test.joblib")
-    y_hat_aa_mean = torch.mean(y_hat_aa.float(), dim=0)
+    y_hat_seg = torch.mean(y_hat_aa.float(), dim=0)
 
-    return y_hat_aa_mean, y_test, X_test
+    # Prediction (Classifier)
+    y_hat_clf = joblib.load("./pred_clf_test_agg_aa.joblib")
+
+    return y_hat_seg, y_hat_clf, y_test, X_test
 
 
-def plot_pred_vs_true(*, y_pred_i, y_test_i) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(4, 4))
-    ax.contour(y_test_i, levels=[0])  # true
-    im = ax.imshow(y_pred_i, origin="lower", cmap="PiYG", vmin=0, vmax=1)  # pred
-    fig.colorbar(im, ax=ax, shrink=0.8, label="Kelp probability")
+def plot_pred_vs_true(*, y_pred_seg_i, y_pred_clf_i, y_test) -> plt.Figure:
+    fig, (ax_clf, ax_seg, ax_cb) = plt.subplots(
+        ncols=3, figsize=(6, 4),
+        gridspec_kw={"width_ratios": [5, 5, 1]}
+    )
+    for ax in [ax_clf, ax_seg]:
+        ax.contour(y_test, levels=[0])  # true
+
+    # Plot predictions
+    ax_clf.imshow(y_pred_clf_i, origin="lower", cmap="PiYG", vmin=0, vmax=1)  # clf
+    ax_clf.set_title("Classification model")
+
+    im = ax_seg.imshow(y_pred_seg_i, origin="lower", cmap="PiYG", vmin=0, vmax=1)  # seg
+    ax_seg.set_title("Segmentation model")
+
+    # Colorbar
+    fig.colorbar(im, ax=ax_cb, shrink=0.8, label="Kelp probability")
+    ax_cb.axis("off")
 
     # No ticks and labels
-    ax.set_xlabel("")
-    ax.set_ylabel("")
-    ax.set_xticks([])
-    ax.set_yticks([])
+    for ax in [ax_seg, ax_clf]:
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.set_xticks([])
+        ax.set_yticks([])
 
-    # Aspect ratio 1:1
-    ax.set_aspect("equal")
+        # Aspect ratio 1:1
+        ax.set_aspect("equal")
 
     return fig
 
@@ -82,35 +99,36 @@ def plot_channels(X: xr.DataArray) -> plt.Figure:
 
 
 def app():
-    y_pred, y_test, X_test = load_data()
+    y_pred_seg, y_pred_clf, y_test, X_test = load_data()
 
     # Select sample
     i = st.slider("Select sample", 0, y_test.shape[0] - 1)
-    y_pred_i = y_pred[i]
+    y_pred_seg_i = y_pred_seg[i]
+    y_pred_clf_i = y_pred_clf[i]
     y_test_i = y_test[i]
     X_test_i = X_test[i]
 
-    # Shape of images
-    w = y_pred_i.shape[1]
+    # # Shape of images
+    # w = y_pred_seg_i.shape[1]
 
-    # Cropping
-    col_a, col_b = st.columns(2)
-    center_x = col_a.slider("x", 0, 100, value=50, step=10) / 100 * w
-    center_y = col_a.slider("y", 0, 100, value=50, step=10) / 100 * w
-    crop = col_b.slider("Crop size", 0, 100, value=100, step=10) / 100 * w / 2
+    # # Cropping
+    # col_a, col_b = st.columns(2)
+    # center_x = col_a.slider("x", 0, 100, value=50, step=10) / 100 * w
+    # center_y = col_a.slider("y", 0, 100, value=50, step=10) / 100 * w
+    # crop = col_b.slider("Crop size", 0, 100, value=100, step=10) / 100 * w / 2
 
-    i_min = max(0, int(center_x - crop))
-    i_max = min(w, int(center_x + crop))
-    j_min = max(0, int(center_y - crop))
-    j_max = min(w, int(center_y + crop))
+    # i_min = max(0, int(center_x - crop))
+    # i_max = min(w, int(center_x + crop))
+    # j_min = max(0, int(center_y - crop))
+    # j_max = min(w, int(center_y + crop))
 
-    y_pred_i = y_pred_i[i_min:i_max, j_min:j_max]
-    y_test_i = y_test_i[i_min:i_max, j_min:j_max]
-    X_test_i = X_test_i[i_min:i_max, j_min:j_max]
+    # y_pred_seg_i = y_pred_seg_i[i_min:i_max, j_min:j_max]
+    # y_test_i = y_test_i[i_min:i_max, j_min:j_max]
+    # X_test_i = X_test_i[i_min:i_max, j_min:j_max]
 
     # Plot
     st.pyplot(
-        plot_pred_vs_true(y_pred_i=y_pred_i, y_test_i=y_test_i)
+        plot_pred_vs_true(y_pred_seg_i=y_pred_seg_i, y_pred_clf_i=y_pred_clf_i, y_test=y_test_i)
     )
     st.pyplot(
         plot_channels(X_test_i)
