@@ -4,20 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from data import KelpNCDataset
-
-CMAP_TARGET = "Purples"
-CMAP_DEFAULT = "bone_r"
-CMAP_BINARY = "binary"
-CMAP_TO_CH = {
-    "swir": "Greys",
-    "nir": "Greys",
-    "r": "Reds",
-    "g": "Greens",
-    "b": "Blues",
-    "is_land": CMAP_BINARY,
-    "is_cloud": CMAP_BINARY,
-    "not_cloud_land": CMAP_BINARY,
-}
+from viz_shared import CMAP_DEFAULT, CMAP_TARGET, CMAP_TO_CH
 
 
 @st.cache_data
