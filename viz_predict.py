@@ -1,16 +1,30 @@
-import streamlit as st
+from typing import Tuple
+
+import io
 import joblib
-import torch
 import matplotlib.pyplot as plt
+import numpy as np
+import streamlit as st
+import torch
 import xarray as xr
 
-import torch_deeplabv3 as dlv3
 import shared
-from viz_shared import CMAP_DEFAULT, CMAP_TO_CH, CH_ORDER
+import torch_deeplabv3 as dlv3
+from viz_shared import CH_ORDER, CMAP_DEFAULT, CMAP_TO_CH
+
+PANEL_WIDTH = 3
+
+
+def fig_to_buffer(fig: plt.Figure, format: str) -> io.BytesIO:
+    """Convert a Matplotlib figure to a PNG image buffer."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format=format)
+    buf.seek(0)
+    return buf
 
 
 @st.cache_data
-def load_data():
+def load_data() -> Tuple[np.ndarray, np.ndarray, xr.DataArray, xr.DataArray]:
     # True / test
     _, _, ds_test = dlv3.get_dataset(use_channels=None, random_seed=shared.GLOBAL_SEED)
     y_test = ds_test.masks
@@ -18,17 +32,31 @@ def load_data():
 
     # Prediction (Segmentation)
     scores, y_hat_aa, _ = joblib.load("ens_dlv3/dev/pred_dlv3_test.joblib")
-    y_hat_seg = torch.mean(y_hat_aa.float(), dim=0)
+    y_hat_seg = torch.mean(y_hat_aa.float(), dim=0).numpy()
 
     # Prediction (Classifier)
     y_hat_clf = joblib.load("./pred_clf_test_agg_aa.joblib")
+
+    # Compute kelp fraction...
+    _, h, w = y_test.shape
+    y_test_kf = y_test.sum(dim=("i", "j")) / (h * w)
+    y_test_kf = y_test_kf.compute()
+    kf_order = np.argsort(-y_test_kf).data  # most kf comes first
+
+    # ...and sort all data accordingly
+    y_test = y_test[kf_order]
+    X_test = X_test[kf_order]
+    y_hat_seg = y_hat_seg[kf_order]
+    y_hat_clf = y_hat_clf[kf_order]
 
     return y_hat_seg, y_hat_clf, y_test, X_test
 
 
 def plot_pred_vs_true(*, y_pred_seg_i, y_pred_clf_i, y_test) -> plt.Figure:
+    fig_width = PANEL_WIDTH * (11 / 5)
+    fig_height = PANEL_WIDTH
     fig, (ax_clf, ax_seg, ax_cb) = plt.subplots(
-        ncols=3, figsize=(6, 4),
+        ncols=3, figsize=(fig_width, fig_height),
         gridspec_kw={"width_ratios": [5, 5, 1]}
     )
     for ax in [ax_clf, ax_seg]:
@@ -61,11 +89,10 @@ def plot_pred_vs_true(*, y_pred_seg_i, y_pred_clf_i, y_test) -> plt.Figure:
 def plot_channels(X: xr.DataArray) -> plt.Figure:
     all_channels = X.ch.data
     n_ch = len(all_channels)
-    n_cols = 4
+    n_cols = 5
     n_rows = n_ch // n_cols + 1
 
-    panel_width = 2
-    fig_width = panel_width * n_cols
+    fig_width = PANEL_WIDTH * n_cols
     fig_height = fig_width / n_cols * n_rows * 1.4
 
     fig, axarr = plt.subplots(
@@ -107,6 +134,7 @@ def app():
     y_pred_clf_i = y_pred_clf[i]
     y_test_i = y_test[i]
     X_test_i = X_test[i]
+    sample_id = X_test_i.sample.item()
 
     # # Shape of images
     # w = y_pred_seg_i.shape[1]
@@ -127,11 +155,23 @@ def app():
     # X_test_i = X_test_i[i_min:i_max, j_min:j_max]
 
     # Plot
-    st.pyplot(
-        plot_pred_vs_true(y_pred_seg_i=y_pred_seg_i, y_pred_clf_i=y_pred_clf_i, y_test=y_test_i)
+    fig_pred_vs_true = plot_pred_vs_true(y_pred_seg_i=y_pred_seg_i, y_pred_clf_i=y_pred_clf_i, y_test=y_test_i)
+    fig_channels = plot_channels(X_test_i)
+    st.pyplot(fig_pred_vs_true)
+    st.pyplot(fig_channels)
+
+    # Download buttons for figures (SVG)
+    st.download_button(
+        label="Download prediction vs. true",
+        data=fig_to_buffer(fig_pred_vs_true, format="svg"),
+        file_name=f"kelp_{sample_id}_pred_vs_true.svg",
+        mime="image/svg+xml",
     )
-    st.pyplot(
-        plot_channels(X_test_i)
+    st.download_button(
+        label="Download channels",
+        data=fig_to_buffer(fig_channels, format="svg"),
+        file_name=f"kelp_{sample_id}_channels.svg",
+        mime="image/svg+xml",
     )
 
 
