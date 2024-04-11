@@ -19,7 +19,7 @@ def get_dataset() -> KelpNCDataset:
     return ds
 
 
-def plot_channels(X: xr.DataArray, y: xr.DataArray) -> plt.Figure:
+def plot_channels(X: xr.DataArray, y: xr.DataArray, y_outline: bool) -> plt.Figure:
     all_channels = X.ch.data
     n_ch = len(all_channels)
 
@@ -27,6 +27,8 @@ def plot_channels(X: xr.DataArray, y: xr.DataArray) -> plt.Figure:
 
     # Target
     y.plot(ax=axarr[0], cmap=CMAP_TARGET, vmin=0, vmax=1)
+    if y_outline:
+        y.plot.contour(ax=axarr[0], colors="black", levels=[0.5], linewidths=1)
 
     # Channels
     for ax, c in zip(axarr[1:], all_channels):
@@ -41,8 +43,14 @@ def plot_channels(X: xr.DataArray, y: xr.DataArray) -> plt.Figure:
 
 def app():
     ds = get_dataset()
-    X, y = ds[st.slider("Index", 0, 100)]
-    st.pyplot(plot_channels(X, y))
+
+    sample_ids = list(ds.imgs.sample.data)
+    sample_id = st.sidebar.selectbox("Select sample", sample_ids)
+    i = sample_ids.index(sample_id)
+    y_outline = st.sidebar.toggle("Target outline", True)
+
+    X, y = ds[i]
+    st.pyplot(plot_channels(X, y, y_outline))
 
 
 if __name__ == "__main__":

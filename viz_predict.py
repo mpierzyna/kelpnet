@@ -10,21 +10,21 @@ import xarray as xr
 
 import shared
 import torch_deeplabv3 as dlv3
-from viz_shared import CH_ORDER, CMAP_DEFAULT, CMAP_TO_CH
+from viz_shared import CH_ORDER, CMAP_DEFAULT, CMAP_TO_CH, CMAP_TARGET
 
 PANEL_WIDTH = 3
 
 
-def fig_to_buffer(fig: plt.Figure, format: str) -> io.BytesIO:
+def fig_to_buffer(fig: plt.Figure, format: str, dpi: int) -> io.BytesIO:
     """Convert a Matplotlib figure to a PNG image buffer."""
     buf = io.BytesIO()
-    fig.savefig(buf, format=format)
+    fig.savefig(buf, format=format, dpi=dpi)
     buf.seek(0)
     return buf
 
 
 @st.cache_data
-def load_data() -> Tuple[np.ndarray, np.ndarray, xr.DataArray, xr.DataArray]:
+def load_data() -> Tuple[np.ndarray, np.ndarray, xr.DataArray, xr.DataArray, xr.DataArray]:
     # True / test
     _, _, ds_test = dlv3.get_dataset(use_channels=None, random_seed=shared.GLOBAL_SEED)
     y_test = ds_test.masks
@@ -44,29 +44,32 @@ def load_data() -> Tuple[np.ndarray, np.ndarray, xr.DataArray, xr.DataArray]:
     kf_order = np.argsort(-y_test_kf).data  # most kf comes first
 
     # ...and sort all data accordingly
+    y_test_kf = y_test_kf[kf_order]
     y_test = y_test[kf_order]
     X_test = X_test[kf_order]
     y_hat_seg = y_hat_seg[kf_order]
     y_hat_clf = y_hat_clf[kf_order]
 
-    return y_hat_seg, y_hat_clf, y_test, X_test
+    return y_hat_seg, y_hat_clf, y_test, X_test, y_test_kf
 
 
-def plot_pred_vs_true(*, y_pred_seg_i, y_pred_clf_i, y_test) -> plt.Figure:
+def plot_pred_vs_true(*, y_pred_seg_i, y_pred_clf_i, y_test,
+                      show_true_outline: bool) -> plt.Figure:
     fig_width = PANEL_WIDTH * (11 / 5)
     fig_height = PANEL_WIDTH
     fig, (ax_clf, ax_seg, ax_cb) = plt.subplots(
         ncols=3, figsize=(fig_width, fig_height),
         gridspec_kw={"width_ratios": [5, 5, 1]}
     )
-    for ax in [ax_clf, ax_seg]:
-        ax.contour(y_test, levels=[0])  # true
+    if show_true_outline:
+        for ax in [ax_clf, ax_seg]:
+            ax.contour(y_test, colors="black", levels=[.5], linewidths=1)
 
     # Plot predictions
-    ax_clf.imshow(y_pred_clf_i, origin="lower", cmap="PiYG", vmin=0, vmax=1)  # clf
+    ax_clf.imshow(y_pred_clf_i, origin="lower", cmap=CMAP_TARGET, vmin=0, vmax=1)  # clf
     ax_clf.set_title("Classification model")
 
-    im = ax_seg.imshow(y_pred_seg_i, origin="lower", cmap="PiYG", vmin=0, vmax=1)  # seg
+    im = ax_seg.imshow(y_pred_seg_i, origin="lower", cmap=CMAP_TARGET, vmin=0, vmax=1)  # seg
     ax_seg.set_title("Segmentation model")
 
     # Colorbar
@@ -126,15 +129,27 @@ def plot_channels(X: xr.DataArray) -> plt.Figure:
 
 
 def app():
-    y_pred_seg, y_pred_clf, y_test, X_test = load_data()
+    st.title("KelpNet predictions")
+
+    y_pred_seg, y_pred_clf, y_test, X_test, kf = load_data()
+    sample_ids = list(kf.sample.data)
 
     # Select sample
-    i = st.slider("Select sample", 0, y_test.shape[0] - 1)
+    sample_id = st.sidebar.selectbox("Select sample", sample_ids, format_func=lambda s: f"{s}, kf={kf.sel(sample=s).item() * 100:.2f}%")
+    i = sample_ids.index(sample_id)
     y_pred_seg_i = y_pred_seg[i]
     y_pred_clf_i = y_pred_clf[i]
     y_test_i = y_test[i]
     X_test_i = X_test[i]
-    sample_id = X_test_i.sample.item()
+
+    # True contour
+    show_true_outline = st.sidebar.checkbox("Show true outline", value=True)
+
+    # Use threshold
+    use_threshold = st.sidebar.checkbox("Use threshold", value=False)
+    if use_threshold:
+        y_pred_seg_i = (y_pred_seg_i > 0.5).astype(float)
+        y_pred_clf_i = (y_pred_clf_i > 0.5).astype(float)
 
     # # Shape of images
     # w = y_pred_seg_i.shape[1]
@@ -155,21 +170,28 @@ def app():
     # X_test_i = X_test_i[i_min:i_max, j_min:j_max]
 
     # Plot
-    fig_pred_vs_true = plot_pred_vs_true(y_pred_seg_i=y_pred_seg_i, y_pred_clf_i=y_pred_clf_i, y_test=y_test_i)
+    fig_pred_vs_true = plot_pred_vs_true(
+        y_pred_seg_i=y_pred_seg_i, y_pred_clf_i=y_pred_clf_i, y_test=y_test_i, show_true_outline=show_true_outline
+    )
     fig_channels = plot_channels(X_test_i)
+    st.header("Predictions")
     st.pyplot(fig_pred_vs_true)
+
+    st.header("Input")
     st.pyplot(fig_channels)
 
     # Download buttons for figures (SVG)
-    st.download_button(
+    st.sidebar.write("Download figures")
+    dpi = st.sidebar.number_input("DPI", min_value=50, max_value=1000, value=150, step=50)
+    st.sidebar.download_button(
         label="Download prediction vs. true",
-        data=fig_to_buffer(fig_pred_vs_true, format="svg"),
+        data=fig_to_buffer(fig_pred_vs_true, format="svg", dpi=dpi),
         file_name=f"kelp_{sample_id}_pred_vs_true.svg",
         mime="image/svg+xml",
     )
-    st.download_button(
+    st.sidebar.download_button(
         label="Download channels",
-        data=fig_to_buffer(fig_channels, format="svg"),
+        data=fig_to_buffer(fig_channels, format="svg", dpi=dpi),
         file_name=f"kelp_{sample_id}_channels.svg",
         mime="image/svg+xml",
     )

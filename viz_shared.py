@@ -1,4 +1,12 @@
-CMAP_TARGET = "PiYG"
+import matplotlib.colors
+import numpy as np
+import cmcrameri as cmc
+
+
+CMAP_TARGET = matplotlib.colors.LinearSegmentedColormap.from_list(
+    "truncated",
+    cmc.cm.broc(np.linspace(.25, .75, 25))
+)
 CMAP_DEFAULT = "bone_r"
 CMAP_BINARY = "binary"
 CMAP_TO_CH = {
