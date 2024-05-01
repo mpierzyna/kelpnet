@@ -11,6 +11,15 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": false
+        },
+        {
+            "name": "Python Debugger: step_3b",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "step_3b_eval_ens_2staged.py",
+            "args": ["test"],
+            "console": "integratedTerminal",
+            "justMyCode": false
         }
     ]
 }

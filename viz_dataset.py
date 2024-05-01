@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from data import KelpNCDataset
-from viz_shared import CMAP_DEFAULT, CMAP_TARGET, CMAP_TO_CH
+from viz_shared import CMAP_DEFAULT, CMAP_TARGET, CMAP_TO_CH, fig_to_buffer
 
 
 @st.cache_data
@@ -22,13 +22,20 @@ def get_dataset() -> KelpNCDataset:
 def plot_channels(X: xr.DataArray, y: xr.DataArray, y_outline: bool) -> plt.Figure:
     all_channels = X.ch.data
     n_ch = len(all_channels)
+    n_ch = 0
 
     fig, axarr = plt.subplots(nrows=n_ch + 1, figsize=(4, 4 * (n_ch + 1)))
+    axarr = [axarr] if n_ch == 0 else axarr
 
     # Target
-    y.plot(ax=axarr[0], cmap=CMAP_TARGET, vmin=0, vmax=1)
+    y.plot(ax=axarr[0], cmap=CMAP_TARGET, vmin=0, vmax=1, rasterized=True)
     if y_outline:
         y.plot.contour(ax=axarr[0], colors="black", levels=[0.5], linewidths=1)
+    axarr[0].set_aspect("equal")
+    axarr[0].set_xlabel("")
+    axarr[0].set_ylabel("")
+    axarr[0].set_xticks([])
+    axarr[0].set_yticks([])
 
     # Channels
     for ax, c in zip(axarr[1:], all_channels):
@@ -50,7 +57,16 @@ def app():
     y_outline = st.sidebar.toggle("Target outline", True)
 
     X, y = ds[i]
-    st.pyplot(plot_channels(X, y, y_outline))
+    fig = plot_channels(X, y, y_outline)
+    st.pyplot(fig)
+
+    if st.sidebar.toggle("Enable download"):
+        st.sidebar.download_button(
+            label="Download SVG",
+            data=fig_to_buffer(fig, format="svg", dpi=150),
+            file_name=f"{sample_id}_viz_dataset.svg",
+            mime="image/svg+xml",
+        )
 
 
 if __name__ == "__main__":

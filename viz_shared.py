@@ -1,7 +1,9 @@
-import matplotlib.colors
-import numpy as np
-import cmcrameri as cmc
+import io
 
+import cmcrameri as cmc
+import matplotlib.colors
+import matplotlib.pyplot as plt
+import numpy as np
 
 CMAP_TARGET = matplotlib.colors.LinearSegmentedColormap.from_list(
     "truncated",
@@ -27,3 +29,11 @@ CH_ORDER = [
     "ndti", "evi", "cari",
     "is_cloud", "is_land"
 ]
+
+
+def fig_to_buffer(fig: plt.Figure, format: str, dpi: int) -> io.BytesIO:
+    """Convert a Matplotlib figure to a PNG image buffer."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format=format, dpi=dpi)
+    buf.seek(0)
+    return buf

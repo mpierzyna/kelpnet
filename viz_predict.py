@@ -1,6 +1,5 @@
 from typing import Tuple
 
-import io
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,17 +9,10 @@ import xarray as xr
 
 import shared
 import torch_deeplabv3 as dlv3
-from viz_shared import CH_ORDER, CMAP_DEFAULT, CMAP_TO_CH, CMAP_TARGET
+from viz_shared import (CH_ORDER, CMAP_DEFAULT, CMAP_TARGET, CMAP_TO_CH,
+                        fig_to_buffer)
 
 PANEL_WIDTH = 3
-
-
-def fig_to_buffer(fig: plt.Figure, format: str, dpi: int) -> io.BytesIO:
-    """Convert a Matplotlib figure to a PNG image buffer."""
-    buf = io.BytesIO()
-    fig.savefig(buf, format=format, dpi=dpi)
-    buf.seek(0)
-    return buf
 
 
 @st.cache_data
@@ -181,20 +173,21 @@ def app():
     st.pyplot(fig_channels)
 
     # Download buttons for figures (SVG)
-    st.sidebar.write("Download figures")
-    dpi = st.sidebar.number_input("DPI", min_value=50, max_value=1000, value=150, step=50)
-    st.sidebar.download_button(
-        label="Download prediction vs. true",
-        data=fig_to_buffer(fig_pred_vs_true, format="svg", dpi=dpi),
-        file_name=f"kelp_{sample_id}_pred_vs_true.svg",
-        mime="image/svg+xml",
-    )
-    st.sidebar.download_button(
-        label="Download channels",
-        data=fig_to_buffer(fig_channels, format="svg", dpi=dpi),
-        file_name=f"kelp_{sample_id}_channels.svg",
-        mime="image/svg+xml",
-    )
+    if st.sidebar.toggle("Enable download", False):
+        st.sidebar.write("Download figures")
+        dpi = st.sidebar.number_input("DPI", min_value=50, max_value=1000, value=150, step=50)
+        st.sidebar.download_button(
+            label="Download prediction vs. true",
+            data=fig_to_buffer(fig_pred_vs_true, format="svg", dpi=dpi),
+            file_name=f"kelp_{sample_id}_pred_vs_true.svg",
+            mime="image/svg+xml",
+        )
+        st.sidebar.download_button(
+            label="Download channels",
+            data=fig_to_buffer(fig_channels, format="svg", dpi=dpi),
+            file_name=f"kelp_{sample_id}_channels.svg",
+            mime="image/svg+xml",
+        )
 
 
 if __name__ == "__main__":
